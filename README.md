@@ -176,11 +176,17 @@ uv run blueocean-admin manifest <project>
 uv run blueocean-admin list
 uv run blueocean-admin export <project>
 uv run blueocean-admin prune <project> --older-days 90 --max-importance 2 [--dry-run]
+uv run blueocean-admin snapshot <project> [--out ./backups]
+uv run blueocean-admin restore <project> <snapshot-file> --yes
 uv run blueocean-admin generate-token --write-env
 ```
 
 > [!WARNING]
 > If more than one agent session shares a project, `prune` doesn't know that. It deletes whatever matches your filters, even entries another session wrote five minutes ago. Run with `--dry-run` first, and prefer narrow filters over a broad reset.
+
+`export` only dumps payload as JSON (`with_vectors=False`) — restoring from it means re-embedding everything from scratch, not a real point-in-time restore. `snapshot`/`restore` use Qdrant's own native snapshot mechanism instead: vectors, payload, and index state, captured atomically. `snapshot` downloads the file to local disk and deletes the server-side copy once the download is confirmed intact (backups living only inside the same Qdrant volume they're backing up out of aren't backups). `restore` overwrites the project's current data, so it requires `--yes`.
+
+Project names are validated strictly (`^[a-z0-9][a-z0-9_-]*$`, matching the directory-name convention this project already recommends) rather than silently normalized — two agents guessing slightly different spellings of the same project (`"Team A"` vs `"team-a"`) used to merge into one collection with no warning; now the mismatched one is rejected instead.
 
 ---
 
@@ -192,6 +198,7 @@ Test files under `tests/` are standalone scripts (`if __name__ == "__main__":`),
 uv run python -m tests.smoke
 uv run python -m tests.auth
 uv run python -m tests.mcp_e2e
+uv run python -m tests.backup   # real snapshot -> delete collection -> restore cycle
 ```
 
 `tests/auth.py` specifically checks that unauthenticated and wrong-token requests get rejected (401) and that a correct token works via both the header and the `?token=` query-param path.

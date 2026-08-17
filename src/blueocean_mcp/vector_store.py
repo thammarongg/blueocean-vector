@@ -6,6 +6,7 @@ metadata. Filters on area/module/importance/time scope down searches so that a
 large (XL) project collection is not scanned wholesale.
 """
 
+import re
 import threading
 import time
 import uuid
@@ -28,8 +29,33 @@ from .embeddings import Embedder
 PAYLOAD_INDEX_FIELDS = ["area", "module", "importance", "timestamp"]
 
 
+_PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,99}$")
+
+
+def _suggest_slug(project: str) -> str:
+    slug = project.strip().lower()
+    slug = re.sub(r"[^a-z0-9_-]+", "-", slug)
+    slug = re.sub(r"-{2,}", "-", slug).strip("-")
+    return slug or "project"
+
+
 def collection_name(project: str) -> str:
-    project = project.replace("/", "_").replace(" ", "_").lower()
+    """Map a project name to its Qdrant collection name.
+
+    Strict, not normalizing: different callers (agents/tools) each guess a
+    project's name independently, so silently folding "Team A", "team/a",
+    and "TEAM-A" into the same collection would let unrelated callers'
+    memory quietly mix with zero warning. Rejecting anything outside the
+    canonical form forces every caller onto the one string that maps to a
+    given project, which is what actually prevents the collision -- not a
+    smarter normalization function.
+    """
+    if not _PROJECT_NAME_RE.match(project):
+        raise ValueError(
+            f"invalid project name {project!r}: allowed: lowercase letters, "
+            f"digits, '-', '_', starting with a letter/digit, max 100 chars. "
+            f"did you mean {_suggest_slug(project)!r}?"
+        )
     return f"{DEFAULT_COLLECTION_PREFIX}_{project}"
 
 
