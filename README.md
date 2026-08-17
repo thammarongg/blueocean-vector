@@ -62,6 +62,28 @@ Two honest takeaways:
 - **The "MCP-native, works with any client" niche isn't empty** — Memorix already lives there, with more built-in tools. What's different here is that vector search is the primary retrieval path rather than a fallback or something gated behind a paid tier, the default embedding model is genuinely multilingual (Thai+English tested), and it's built to run as one shared, persistent server rather than a zero-install per-agent tool — bearer-token auth, a documented path to ECS, Kubernetes-ready health probes, and real fixes for the concurrency problems a *shared* server actually hits.
 - **No automatic extraction or consolidation** — unlike mem0, Graphiti, Letta, cognee, or LangMem, nothing here reads your conversation and decides what's worth remembering. That's a deliberate simplicity trade-off, not a missing feature: an agent has to explicitly call `memory_store`. If you want a system that reasons about what to keep on your behalf, one of the projects above will do that better than this will.
 
+### Memory shouldn't try to hold a million lines
+
+Some projects are a million lines of code. And no memory system — BlueOcean Vector included — should try to store all of it. Storing code is a code-search tool's job, not a memory server's.
+
+BlueOcean's job is narrower and more useful: **remember what mattered, and where to find it.** It holds the decisions, the architecture, the "we tried that, it didn't work" — the condensed knowledge an agent would otherwise have to rediscover from a million lines — plus just enough context to point the agent back at the real code when it needs details.
+
+The result is that memory grows with *what's actually worth remembering*, not with the size of the codebase. A million-line project can have a few thousand memory entries. That keeps retrieval cheap no matter how big the project gets.
+
+### The token math
+
+Reading memory back is where that distinction pays off. The cheapest alternative — a skill or plugin that dumps project notes into a `.remember` file an agent reads back — works great until the file outgrows the context window, then it silently stops being useful.
+
+BlueOcean caps every search at a token budget (default **2000 tokens**, configurable via `BLUEOCEAN_MAX_TOKENS`). Semantic search pulls only the relevant entries, then splits the budget: ~60% for condensed summaries, ~40% for the full content of the top hits. Entries beyond the budget are truncated, never dumped wholesale.
+
+| Approach | Cost per retrieval | Grows with memory size? |
+|---|---|---|
+| **BlueOcean Vector** (`memory_search`) | **capped** at the token budget (default 2000) | No — bounded, regardless of collection size |
+| `.remember` file (read whole file) | equal to the whole file size | Yes — linear; eventually exceeds the context window |
+| `.remember` file (agent reads one section) | equal to that section | Partial — but the agent must guess which section without relevance ranking |
+
+A real search against a small demo project returned **121 tokens** for one summary + one full entry — a few percent of the 2000-token budget, and that budget never grows as the project accumulates memory. With a plain file, the same read costs the entire file every time, so a 5k-entry project (hundreds of thousands of tokens) is unreadable in one shot.
+
 ---
 
 ## How it fits together
