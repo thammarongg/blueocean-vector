@@ -1,0 +1,63 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.19.0
+    container_name: blueocean-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    restart: unless-stopped
+    healthcheck:
+      # No curl/wget in this image, but bash is present -- a plain TCP check
+      # is enough here since blueocean-mcp's own /health does the real,
+      # semantic "can I actually reach Qdrant" check.
+      test: ["CMD", "bash", "-c", "</dev/tcp/localhost/6333"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # Persistent MCP server reachable over the network (streamable-http).
+  # Any MCP client that supports "add server by URL" (Claude Code, Cursor,
+  # Codex, Gemini/Antigravity, Kiro, and future/unknown tools) can register
+  # this at http://localhost:8765/mcp without us writing any tool-specific
+  # config-file-editing code.
+  blueocean-mcp:
+    build: .
+    container_name: blueocean-mcp
+    command:
+      - "--transport"
+      - "streamable-http"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8765"
+      - "--qdrant-url"
+      - "http://qdrant:6333"
+    environment:
+      # Bearer token required on every request, read from .env at the repo
+      # root. Empty/unset = no auth. Generate one with:
+      #   uv run blueocean-admin generate-token --write-env
+      - BLUEOCEAN_AUTH_TOKEN=${BLUEOCEAN_AUTH_TOKEN:-}
+    ports:
+      - "8765:8765"
+    healthcheck:
+      # /health is a real readiness check (also verifies Qdrant is
+      # reachable), not just "the process is alive". It's deliberately
+      # unauthenticated -- see src/blueocean_mcp/health.py.
+      test: [
+        "CMD", "python3", "-c",
+        "import urllib.request; urllib.request.urlopen('http://localhost:8765/health', timeout=3)"
+      ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  qdrant_storage:
