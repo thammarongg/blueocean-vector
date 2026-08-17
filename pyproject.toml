@@ -1,0 +1,58 @@
+[project]
+name = "blueocean-vector"
+version = "0.1.0"
+description = "Unified agent memory: a Qdrant-backed vector knowledge base exposed as a Model Context Protocol (MCP) server. Shared memory across Claude Code, Codex, Cursor, and other MCP-capable agents."
+readme = "README.md"
+license = { text = "MIT" }
+authors = [
+    { name = "Thammarong G.", email = "thammrong@gmail.com" }
+]
+requires-python = ">=3.12"
+keywords = ["mcp", "vector", "memory", "qdrant", "rag", "agent"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries",
+]
+dependencies = [
+    # Pinned to the major/minor version this code is actually written against
+    # and tested with (mcp's API surface -- e.g. mcp.server.mcpserver.MCPServer
+    # -- has changed significantly between releases; a loose constraint here
+    # risks `pip install .` in Docker silently resolving an incompatible
+    # version, since Docker builds don't use uv.lock).
+    "mcp>=2.0.0,<3.0.0",
+    "qdrant-client>=1.19.0,<1.20",
+    "fastembed>=0.3.0",
+]
+
+[project.optional-dependencies]
+openai = [
+    # Construction/dimension logic verified against 1.x and current 3.x;
+    # unverified beyond that, so capped rather than left fully open.
+    "openai>=1.0.0,<4.0.0",
+]
+bedrock = [
+    "boto3>=1.34.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "ruff>=0.5.0",
+]
+
+[project.scripts]
+blueocean-mcp = "blueocean_mcp.__main__:main"
+blueocean-admin = "blueocean_mcp.admin:main"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"
