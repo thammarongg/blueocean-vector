@@ -220,6 +220,8 @@ Not every tool can set a custom header when registering a remote server by URL, 
 
 `GET /health` is deliberately unauthenticated and checks that Qdrant is actually reachable, not just that the process is alive. It's what `docker-compose.yml`'s healthcheck polls.
 
+Set the token via `BLUEOCEAN_AUTH_TOKEN` (env var / `.env`), not the `--auth-token` CLI flag — a value passed as a CLI argument is visible to any other local user via `ps`. Request access logging is also off by default (`access_log=False`), since three of the five supported clients send the token as `?token=...` and a plain access log would put it in plaintext in your logs on every single request.
+
 ---
 
 ## Deploying beyond localhost
