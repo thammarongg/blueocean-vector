@@ -10,6 +10,8 @@ _KNOWN_DIMENSIONS = {
     "text-embedding-ada-002": 1536,
 }
 
+DEFAULT_MODEL = "text-embedding-3-small"
+
 
 class OpenAIEmbedder(Embedder):
     """Embedder backed by OpenAI's embeddings API."""
@@ -18,7 +20,7 @@ class OpenAIEmbedder(Embedder):
 
     def __init__(
         self,
-        model: str = "text-embedding-3-small",
+        model: str = DEFAULT_MODEL,
         api_key: str | None = None,
         base_url: str | None = None,
         dimension: int | None = None,

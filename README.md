@@ -221,6 +221,7 @@ uv run python -m tests.smoke
 uv run python -m tests.auth
 uv run python -m tests.mcp_e2e
 uv run python -m tests.backup   # real snapshot -> delete collection -> restore cycle
+uv run python -m tests.health   # /health diagnostics + the cloud-provider self-test TTL cache
 ```
 
 `tests/auth.py` specifically checks that unauthenticated and wrong-token requests get rejected (401) and that a correct token works via both the header and the `?token=` query-param path.
@@ -247,7 +248,11 @@ Not every tool can set a custom header when registering a remote server by URL, 
 
 `stdio` transport skips this entirely: it's a locally spawned subprocess, already gated by OS process-spawn permissions rather than sitting on the network.
 
-`GET /health` is deliberately unauthenticated and checks that Qdrant is actually reachable, not just that the process is alive. It's what `docker-compose.yml`'s healthcheck polls.
+`GET /health` is deliberately unauthenticated and checks that Qdrant is actually reachable, not just that the process is alive. It's what `docker-compose.yml`'s healthcheck polls. It also reports the active embedding provider/model, and for `openai`/`bedrock` (not `fastembed`, whose model load already gates process startup) validates credentials via a free control-plane call rather than the billed embed endpoint, caching the result for `BLUEOCEAN_HEALTH_EMBED_TTL` seconds (default 60) so a 10s probe interval doesn't turn into a provider API call on every hit:
+
+```json
+{"status": "ok", "qdrant": "reachable", "embedding": {"provider": "fastembed", "model": "intfloat/multilingual-e5-large", "ok": true}}
+```
 
 Set the token via `BLUEOCEAN_AUTH_TOKEN` (env var / `.env`), not the `--auth-token` CLI flag — a value passed as a CLI argument is visible to any other local user via `ps`. Request access logging is also off by default (`access_log=False`), since three of the five supported clients send the token as `?token=...` and a plain access log would put it in plaintext in your logs on every single request.
 

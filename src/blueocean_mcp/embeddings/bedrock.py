@@ -4,6 +4,8 @@ from typing import Any
 
 from .base import Embedder
 
+DEFAULT_MODEL_ID = "amazon.titan-embed-text-v2:0"
+
 
 class BedrockEmbedder(Embedder):
     """Embedder backed by Amazon Bedrock Titan embeddings."""
@@ -19,7 +21,7 @@ class BedrockEmbedder(Embedder):
 
         self._model_id = model_id or os.getenv(
             "BLUEOCEAN_BEDROCK_MODEL_ID",
-            "amazon.titan-embed-text-v2:0",
+            DEFAULT_MODEL_ID,
         )
         self._client = boto3.client(
             "bedrock-runtime",

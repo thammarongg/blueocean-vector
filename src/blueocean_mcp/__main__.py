@@ -21,11 +21,19 @@ def _serve_http(mcp, host: str, port: int, token: str | None, qdrant_url: str) -
     from starlette.routing import Route
 
     from .auth import wrap_with_auth
-    from .health import build_health_route
+    from .health import build_health_route, resolve_embedding_model
 
     async def _run() -> None:
+        embedding_provider = os.getenv("BLUEOCEAN_EMBEDDING", "fastembed")
+        embedding_model = resolve_embedding_model(embedding_provider)
         mcp_app = mcp.streamable_http_app(host=host)
-        mcp_app.router.routes.insert(0, Route("/health", build_health_route(qdrant_url)))
+        mcp_app.router.routes.insert(
+            0,
+            Route(
+                "/health",
+                build_health_route(qdrant_url, embedding_provider, embedding_model),
+            ),
+        )
         app = wrap_with_auth(mcp_app, token, exempt_paths=frozenset({"/health"}))
         # access_log=False: uvicorn's default access log prints the full
         # request line, including query string. Codex/Kiro/Cursor can't set

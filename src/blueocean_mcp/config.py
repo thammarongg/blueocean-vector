@@ -15,3 +15,12 @@ MAX_TOP_K = int(os.getenv("BLUEOCEAN_MAX_TOP_K", "200"))
 
 DEFAULT_HNSW_M = int(os.getenv("BLUEOCEAN_HNSW_M", "16"))
 DEFAULT_HNSW_EF_CONSTRUCT = int(os.getenv("BLUEOCEAN_HNSW_EF_CONSTRUCT", "100"))
+
+# How long /health caches a cloud embedding provider's (openai/bedrock)
+# credential self-test result. Without this, docker-compose.yml's 10s
+# healthcheck interval would turn into a provider API call every 10s --
+# fine for fastembed (local, free) but a real rate-limit/latency risk for
+# a remote provider. fastembed itself never uses this: its model loads
+# synchronously at server startup, so a broken load crashes before /health
+# could ever be hit, making a repeated check pointless.
+DEFAULT_HEALTH_EMBED_TTL = float(os.getenv("BLUEOCEAN_HEALTH_EMBED_TTL", "60"))
