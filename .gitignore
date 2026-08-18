@@ -22,3 +22,6 @@ wheels/
 
 # blueocean-admin snapshot output (contains vectors + payload -- not source)
 /backups/
+
+# Local research notes
+/docs/vector-db-comparison.md
