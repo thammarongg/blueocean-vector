@@ -47,6 +47,16 @@ class OpenAIEmbedder(Embedder):
         return self._dimension
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        import time
+
+        from ..telemetry import usage
+
+        started = time.perf_counter()
         resp = self._client.embeddings.create(model=self._model, input=texts)
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        # The API already tells us the exact token count; the old code threw
+        # it away with the rest of the response.
+        tokens = getattr(getattr(resp, "usage", None), "prompt_tokens", None)
+        usage.add(tokens, elapsed_ms, exact=tokens is not None)
         data = sorted(resp.data, key=lambda d: d.index)
         return [d.embedding for d in data]

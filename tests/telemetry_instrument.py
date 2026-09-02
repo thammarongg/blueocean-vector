@@ -155,6 +155,71 @@ def test_all_tools_instrumented_except_the_denylist() -> None:
     print(f"  OK: {len(expected)} instrumented, {len(names) - len(expected)} excluded")
 
 
+def test_usage_accumulates_and_is_isolated_per_call() -> None:
+    """Sync tools run through anyio.to_thread.run_sync on a REUSED worker
+    thread pool, so a threading.local would leak one call's token count into
+    the next call on the same worker. A ContextVar does not."""
+    print("== embedding usage accumulates per call, not across calls ==")
+    from blueocean_mcp.telemetry import usage
+
+    usage.reset()
+    usage.add(10, 1.5, exact=True)
+    usage.add(15, 2.5, exact=True)
+    taken = usage.take()
+    assert taken["embed_tokens"] == 25, taken
+    assert abs(taken["embed_ms"] - 4.0) < 0.001, taken
+    assert taken["tokens_exact"] == 1, taken
+
+    usage.reset()
+    assert usage.take()["embed_tokens"] is None, "reset must clear the accumulator"
+    print("  OK")
+
+
+def test_estimated_usage_is_flagged_inexact() -> None:
+    print("== estimated token counts are flagged inexact ==")
+    from blueocean_mcp.telemetry import usage
+
+    usage.reset()
+    usage.add(40, 0.5, exact=False)
+    taken = usage.take()
+    assert taken["embed_tokens"] == 40, taken
+    assert taken["tokens_exact"] == 0, taken
+    print("  OK")
+
+
+def test_bedrock_usage_accumulates_across_texts() -> None:
+    """BedrockEmbedder loops invoke_model once per text. Usage must sum, not
+    overwrite with the last response."""
+    print("== bedrock sums usage across its per-text calls ==")
+    import json as _json
+
+    from blueocean_mcp.embeddings.bedrock import BedrockEmbedder
+    from blueocean_mcp.telemetry import usage
+
+    class FakeBody:
+        def __init__(self, payload):
+            self._payload = payload
+
+        def read(self):
+            return _json.dumps(self._payload).encode()
+
+    class FakeClient:
+        def invoke_model(self, **_kwargs):
+            return {"body": FakeBody({"embedding": [0.1, 0.2], "inputTextTokenCount": 7})}
+
+    embedder = BedrockEmbedder.__new__(BedrockEmbedder)
+    embedder._model_id = "amazon.titan-embed-text-v2:0"
+    embedder._client = FakeClient()
+
+    usage.reset()
+    vectors = embedder.embed(["a", "b", "c"])
+    assert len(vectors) == 3, vectors
+    taken = usage.take()
+    assert taken["embed_tokens"] == 21, f"expected 3 x 7 = 21, got {taken}"
+    assert taken["tokens_exact"] == 1, taken
+    print("  OK")
+
+
 def main() -> None:
     test_ctx_is_injected_and_hidden()
     test_call_is_recorded_with_timing()
@@ -162,6 +227,9 @@ def main() -> None:
     test_telemetry_failure_does_not_break_the_tool()
     test_memory_usage_is_on_the_denylist()
     test_all_tools_instrumented_except_the_denylist()
+    test_usage_accumulates_and_is_isolated_per_call()
+    test_estimated_usage_is_flagged_inexact()
+    test_bedrock_usage_accumulates_across_texts()
     print("\nTELEMETRY INSTRUMENT TEST PASSED")
 
 

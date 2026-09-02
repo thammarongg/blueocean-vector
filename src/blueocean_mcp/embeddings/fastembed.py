@@ -33,8 +33,22 @@ class FastEmbedEmbedder(Embedder):
         return int(self._embedding_model.embedding_size)
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        vectors = list(self._embedding_model.embed(texts))
-        return [v.tolist() for v in vectors]
+        import time
+
+        from ..telemetry import usage
+        from ..token_budget import estimate_tokens
+
+        started = time.perf_counter()
+        vectors = [list(v) for v in self._embedding_model.embed(texts)]
+        # Local and free, so there is no real count to report. Estimating and
+        # flagging it inexact keeps measured and guessed numbers separable
+        # instead of summing them and implying equal precision.
+        usage.add(
+            sum(estimate_tokens(t) for t in texts),
+            (time.perf_counter() - started) * 1000,
+            exact=False,
+        )
+        return vectors
 
     def embed_query(self, text: str) -> list[float]:
         # E5 models need a "query: " prefix for good retrieval quality; this

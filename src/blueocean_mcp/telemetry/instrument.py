@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 from mcp.server.mcpserver import Context
 
+from . import usage
 from .writer import get_writer
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,7 @@ def instrument(
     @functools.wraps(fn)
     def wrapper(*args, ctx: Context | None = None, **kwargs):
         started = time.perf_counter()
+        usage.reset()
         row: dict = {
             "ts": int(time.time()),
             "kind": "tool",
@@ -81,10 +83,12 @@ def instrument(
             row["error_class"] = type(exc).__name__
             row["error_msg"] = str(exc)[:_ERROR_MSG_MAX]
             row["total_ms"] = (time.perf_counter() - started) * 1000
+            row.update(usage.take())
             _safe_record(writer_factory, row)
             raise
         row["ok"] = 1
         row["total_ms"] = (time.perf_counter() - started) * 1000
+        row.update(usage.take())
         _safe_record(writer_factory, row)
         return result
 
