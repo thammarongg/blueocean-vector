@@ -1,0 +1,163 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>BlueOcean memory usage</title>
+<style>
+  :root { color-scheme: light dark; --fg: #16181d; --muted: #6b7280; --line: #e5e7eb; --bg: #fbfbfd; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #e8eaed; --muted: #9aa0a6; --line: #2a2e35; --bg: #14161a; }
+  }
+  body { margin: 0; padding: 24px; background: var(--bg); color: var(--fg);
+         font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 28px 0 8px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; margin-top: 16px; }
+  .tile { border: 1px solid var(--line); border-radius: 8px; padding: 12px; }
+  .tile .v { font-size: 22px; font-variant-numeric: tabular-nums; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--line);
+           font-variant-numeric: tabular-nums; }
+  th { font-weight: 600; color: var(--muted); font-size: 12px; }
+  .wrap { overflow-x: auto; }
+  button { font: inherit; padding: 6px 12px; border: 1px solid var(--line);
+           border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
+</style>
+
+<h1>BlueOcean memory usage</h1>
+<p class="muted" id="window">loading…</p>
+<p>
+  <label>Range
+    <select id="days">
+      <option value="1">24h</option>
+      <option value="7" selected>7 days</option>
+      <option value="30">30 days</option>
+    </select>
+  </label>
+  <button id="refresh">Refresh</button>
+</p>
+
+<div class="tiles" id="tiles"></div>
+<div id="panels"></div>
+
+<script>
+// The token arrives in the URL because clients that cannot set an
+// Authorization header pass it that way. Strip it from the address bar
+// immediately and keep it in memory only: the page is also served with
+// Referrer-Policy: no-referrer so it cannot leak onward.
+const params = new URLSearchParams(location.search);
+const TOKEN = params.get("token");
+if (TOKEN) {
+  params.delete("token");
+  const clean = location.pathname + (params.toString() ? "?" + params : "");
+  history.replaceState({}, "", clean);
+}
+
+const el = (tag, attrs = {}, kids = []) => {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v; else node.setAttribute(k, v);
+  }
+  for (const kid of [].concat(kids)) {
+    node.append(kid instanceof Node ? kid : document.createTextNode(kid));
+  }
+  return node;
+};
+
+const num = (v, digits = 0) =>
+  v === null || v === undefined ? "-" : Number(v).toFixed(digits);
+
+function table(rows, columns) {
+  const t = el("table");
+  t.append(el("tr", {}, columns.map((c) => el("th", {}, c))));
+  if (!rows.length) {
+    t.append(el("tr", {}, el("td", { colspan: columns.length }, "none")));
+    return t;
+  }
+  for (const row of rows) {
+    t.append(el("tr", {}, columns.map((c) => el("td", {}, String(row[c] ?? "-")))));
+  }
+  return t;
+}
+
+function sparkline(daily) {
+  const w = 480, h = 60, pad = 2;
+  const values = daily.map((d) => d.calls);
+  const max = Math.max(1, ...values);
+  const step = values.length > 1 ? (w - pad * 2) / (values.length - 1) : 0;
+  const points = values
+    .map((v, i) => `${pad + i * step},${h - pad - (v / max) * (h - pad * 2)}`)
+    .join(" ");
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  svg.setAttribute("width", "100%");
+  svg.setAttribute("height", String(h));
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
+  path.setAttribute("points", points);
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "1.5");
+  svg.append(path);
+  return svg;
+}
+
+function panel(title, node, note) {
+  const box = el("section");
+  box.append(el("h2", {}, title));
+  if (note) box.append(el("p", { class: "muted" }, note));
+  box.append(el("div", { class: "wrap" }, node));
+  return box;
+}
+
+async function load() {
+  const days = document.getElementById("days").value;
+  const tz = -new Date().getTimezoneOffset();
+  const headers = TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {};
+  const resp = await fetch(`/api/stats?days=${days}&tz_offset_minutes=${tz}`, { headers });
+  if (!resp.ok) {
+    document.getElementById("window").textContent =
+      `Could not load stats: HTTP ${resp.status}`;
+    return;
+  }
+  const s = await resp.json();
+
+  document.getElementById("window").textContent =
+    `Last ${s.window.days} day(s) · ${s.unpriced_calls} unpriced call(s) · ` +
+    `${s.estimated_token_calls} call(s) with estimated token counts · ` +
+    `${s.dropped_events} dropped event(s)`;
+
+  const tiles = [
+    ["Calls", num(s.tiles.calls)],
+    ["p95 latency", `${num(s.tiles.p95_ms, 1)} ms`],
+    ["Error rate", `${num(s.tiles.error_rate * 100, 1)}%`],
+    ["Est. cost", `$${num(s.tiles.est_cost_usd, 6)}`],
+  ];
+  const tileBox = document.getElementById("tiles");
+  tileBox.replaceChildren(
+    ...tiles.map(([label, value]) =>
+      el("div", { class: "tile" }, [el("div", { class: "muted" }, label),
+                                    el("div", { class: "v" }, value)])
+    )
+  );
+
+  const panels = document.getElementById("panels");
+  panels.replaceChildren(
+    panel("Calls per day", sparkline(s.daily)),
+    panel("By tool", table(s.tools, ["tool", "calls", "p50_ms", "p95_ms", "errors"])),
+    panel("By agent", table(s.agents, ["agent_name", "agent_version", "calls"])),
+    panel("Search quality", table([s.quality],
+      ["searches", "zero_result_rate", "mean_top_score", "mean_tokens_returned"])),
+    panel("By project", table(s.projects, ["project", "calls"])),
+    panel("Never retrieved", table(s.unused,
+      ["project", "point_id", "hits", "full_hits", "last_seen_at"]),
+      "Counted since first observed, not within the selected range."),
+    panel("Audit", table(s.audit, ["ts", "tool", "project", "deleted_count", "origin"]),
+      "Rows marked cli-reported were sent by a client. This trail explains " +
+      "accidents; with one shared token it cannot prove a row was not forged."),
+    panel("Recent errors", table(s.errors, ["ts", "tool", "error_class", "error_msg"]))
+  );
+}
+
+document.getElementById("refresh").addEventListener("click", load);
+document.getElementById("days").addEventListener("change", load);
+load();
+</script>
