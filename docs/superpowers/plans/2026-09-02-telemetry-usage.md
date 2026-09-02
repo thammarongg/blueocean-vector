@@ -931,6 +931,8 @@ def test_client_info_is_recorded() -> None:
     Built from the library's real types on purpose: if the field is renamed
     again, this test fails instead of identity silently going NULL."""
     print("== clientInfo lands in agent_name and agent_version ==")
+    from typing import ClassVar
+
     from mcp.types import ClientCapabilities, Implementation, InitializeRequestParams
 
     class FakeSession:
@@ -942,7 +944,7 @@ def test_client_info_is_recorded() -> None:
 
     class FakeCtx:
         session = FakeSession()
-        headers = {"mcp-session-id": "sess-123"}
+        headers: ClassVar[dict[str, str]] = {"mcp-session-id": "sess-123"}
 
     with tempfile.TemporaryDirectory() as d:
         w = _writer_in(d)

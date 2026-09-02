@@ -12,6 +12,7 @@ Run with:
 
 import tempfile
 from pathlib import Path
+from typing import ClassVar
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.utilities.context_injection import find_context_parameter
@@ -146,7 +147,7 @@ def test_client_info_is_recorded() -> None:
 
     class FakeCtx:
         session = FakeSession()
-        headers = {"mcp-session-id": "sess-123"}
+        headers: ClassVar[dict[str, str]] = {"mcp-session-id": "sess-123"}
 
     with tempfile.TemporaryDirectory() as d:
         w = _writer_in(d)
