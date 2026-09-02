@@ -411,7 +411,11 @@ def test_writer_persists_rows() -> None:
         w = writer.TelemetryWriter(path)
         w.start()
         try:
-            w.record({"ts": 1, "kind": "tool", "tool": "memory_search", "ok": 1,
+            # A realistic timestamp, not ts=1: the writer purges rows outside
+            # the retention window at startup, so an epoch-1970 row would be
+            # correctly deleted microseconds after it was written.
+            now = int(time.time())
+            w.record({"ts": now, "kind": "tool", "tool": "memory_search", "ok": 1,
                       "origin": "observed", "result_count": 3})
             w.flush()
         finally:
@@ -624,7 +628,14 @@ class TelemetryWriter:
             logger.warning("telemetry disabled: could not open database", exc_info=True)
             self.disabled = True
             return
-        last_purge = 0.0
+        # "Purge at process start" means exactly that: once, here. Seeding
+        # last_purge from the monotonic clock also stops the first event from
+        # triggering a purge, which is what happens if it starts at 0.0.
+        last_purge = time.monotonic()
+        try:
+            db.purge_old(conn, TELEMETRY_RETENTION_DAYS)
+        except Exception:  # pragma: no cover - purge is best effort
+            logger.warning("telemetry retention purge failed", exc_info=True)
         try:
             while True:
                 try:
