@@ -20,6 +20,9 @@ from typing import Any
 
 from mcp.server.mcpserver import Context
 
+from ..config import DEFAULT_EMBEDDING_PROVIDER
+from . import pricing
+from ..health import resolve_embedding_model
 from . import usage
 from .writer import get_writer
 
@@ -86,11 +89,13 @@ def instrument(
             row["error_msg"] = str(exc)[:_ERROR_MSG_MAX]
             row["total_ms"] = (time.perf_counter() - started) * 1000
             row.update(usage.take())
+            _price(row)
             _safe_record(writer_factory, row)
             raise
         row["ok"] = 1
         row["total_ms"] = (time.perf_counter() - started) * 1000
         row.update(usage.take())
+        _price(row)
         _safe_record(writer_factory, row)
         return result
 
@@ -100,6 +105,20 @@ def instrument(
     )
     wrapper.__annotations__ = {**getattr(fn, "__annotations__", {}), "ctx": Context}
     return wrapper
+
+
+def _price(row: dict) -> None:
+    """Snapshot the price and its source onto the row, so the number stays
+    truthful after the table is updated."""
+    tokens = row.get("embed_tokens")
+    if not tokens:
+        return
+    provider = DEFAULT_EMBEDDING_PROVIDER
+    model = resolve_embedding_model(provider)
+    price, source = pricing.resolve(provider, model)
+    row["unit_price_per_1m"] = price
+    row["price_source"] = source
+    row["est_cost_usd"] = pricing.cost_usd(tokens, price)
 
 
 def _safe_record(writer_factory: Callable[[], Any], row: dict) -> None:
