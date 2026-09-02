@@ -128,6 +128,11 @@ designing around.
 - `full_hits` increments when it is expanded into the `full` layer, and when
   `memory_get` fetches it (same intent).
 
+`memory_get` increments **both** counters, not just `full_hits`. Counting it as
+a full hit alone would leave an entry that is fetched by id ten times sitting
+at `hits = 0`, which puts it at the top of the "never retrieved" list and gets
+it pruned - the opposite of the truth.
+
 The difference between the two is the signal worth having: high `hits` with
 low `full_hits` means the summary was good enough and the entry earns its
 keep; `hits = 0` over a long window means it is safe to prune. Collapsing
