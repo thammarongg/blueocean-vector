@@ -24,3 +24,25 @@ DEFAULT_HNSW_EF_CONSTRUCT = int(os.getenv("BLUEOCEAN_HNSW_EF_CONSTRUCT", "100"))
 # synchronously at server startup, so a broken load crashes before /health
 # could ever be hit, making a repeated check pointless.
 DEFAULT_HEALTH_EMBED_TTL = float(os.getenv("BLUEOCEAN_HEALTH_EMBED_TTL", "60"))
+
+from pathlib import Path
+
+# Telemetry. Off means off: with BLUEOCEAN_TELEMETRY=0 no database file is
+# ever opened, and the HTTP surface answers 503 rather than 404 -- a 404
+# makes a deliberate configuration look like a broken deployment.
+TELEMETRY_ENABLED = os.getenv("BLUEOCEAN_TELEMETRY", "1") != "0"
+
+# Under docker-compose this is overridden to /data/telemetry.db, which is a
+# bind mount. The default below is for running outside a container.
+DEFAULT_TELEMETRY_DB = os.getenv(
+    "BLUEOCEAN_TELEMETRY_DB", str(Path.home() / ".blueocean" / "telemetry.db")
+)
+DEFAULT_PRICING_FILE = os.getenv(
+    "BLUEOCEAN_PRICING_FILE", str(Path.home() / ".blueocean" / "pricing.json")
+)
+TELEMETRY_RETENTION_DAYS = int(os.getenv("BLUEOCEAN_TELEMETRY_RETENTION_DAYS", "90"))
+TELEMETRY_QUEUE_SIZE = int(os.getenv("BLUEOCEAN_TELEMETRY_QUEUE", "10000"))
+
+# Where blueocean-admin looks for the server when it needs telemetry it is
+# not allowed to read off disk (see the spec's single-writer rule).
+DEFAULT_SERVER_URL = os.getenv("BLUEOCEAN_SERVER_URL", "http://localhost:8765")
