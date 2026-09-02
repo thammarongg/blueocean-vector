@@ -1069,6 +1069,49 @@ INSTRUMENT_DENYLIST = frozenset({"memory_usage"})
 _ERROR_MSG_MAX = 200
 
 
+_REDACTED = "<redacted: contained caller text>"
+
+# Arguments already stored in their own columns, and not content. Excluding
+# them keeps an ordinary message like "collection blueocean_myproject not
+# found" readable instead of redacting it for naming the project.
+_NON_SENSITIVE_KEYS = frozenset({"project", "area", "module"})
+
+# Below this length a caller argument matches ordinary words in an
+# infrastructure message and would redact everything.
+_MIN_SENSITIVE_LEN = 8
+
+
+def _caller_strings(kwargs: dict) -> list[str]:
+    out: list[str] = []
+    for key, value in kwargs.items():
+        if key in _NON_SENSITIVE_KEYS:
+            continue
+        if isinstance(value, str):
+            out.append(value)
+        elif isinstance(value, (list, tuple)):
+            out.extend(v for v in value if isinstance(v, str))
+        elif isinstance(value, dict):
+            out.extend(str(v) for v in value.values())
+    return out
+
+
+def _safe_error_message(exc: Exception, kwargs: dict) -> str | None:
+    """Never echo the caller's own text back into telemetry.
+
+    Our two raise sites do not embed memory content, but the libraries we call
+    do quote what they choked on, and what they choked on is the user's
+    memory. Rather than audit every dependency's message formatting forever,
+    drop any message that contains a string the caller passed in.
+    """
+    message = str(exc)
+    if not message:
+        return None
+    for value in _caller_strings(kwargs):
+        if len(value) >= _MIN_SENSITIVE_LEN and value in message:
+            return _REDACTED
+    return message[:_ERROR_MSG_MAX]
+
+
 def _agent_identity(ctx: Any) -> dict:
     """Best-effort identity from the MCP handshake. Every field is
     client-supplied: fine as a grouping key, never an identity assertion."""
@@ -1123,7 +1166,7 @@ def instrument(
         except Exception as exc:
             row["ok"] = 0
             row["error_class"] = type(exc).__name__
-            row["error_msg"] = str(exc)[:_ERROR_MSG_MAX]
+            row["error_msg"] = _safe_error_message(exc, kwargs)
             row["total_ms"] = (time.perf_counter() - started) * 1000
             _safe_record(writer_factory, row)
             raise

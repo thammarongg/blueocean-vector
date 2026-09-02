@@ -510,10 +510,23 @@ entry metadata, or bearer tokens. Enforced by a sentinel round-trip test:
 unique strings are injected into every input, then every column of every table
 is dumped and asserted not to contain them.
 
-`error_msg` is truncated to 200 chars and comes from exception messages. The
-only two `raise` sites in `vector_store.py` are an invalid project name
-(line 54) and content over the size cap (line 193); neither embeds memory
-content in the message. The sentinel test covers regressions here.
+`error_msg` is truncated to 200 chars and comes from exception messages, but
+it is **never the raw message**. Before recording, the wrapper drops the
+message entirely if it contains any string the caller passed in, replacing it
+with the fixed marker `<redacted: contained caller text>`.
+
+The original argument for storing raw messages was that neither `raise` site in
+`vector_store.py` embeds memory content: an invalid project name (line 54) and
+content over the size cap (line 193). That holds for our own code and does not
+hold for the libraries we call. A `qdrant-client` or embedding-provider
+exception can quote the payload it choked on, and that payload is the user's
+memory. The privacy sentinel test caught exactly this during implementation.
+
+The filter compares against the call's own string arguments, skipping
+`project`, `area` and `module` (already stored in their own columns, and not
+content) and ignoring strings shorter than 8 characters, which would otherwise
+match ordinary English words in an infrastructure message. Messages like
+"Connection refused" survive; a message quoting the stored content does not.
 
 Failure isolation:
 
