@@ -13,8 +13,7 @@ import time
 from pathlib import Path
 
 from blueocean_mcp import config
-from blueocean_mcp.telemetry import db
-from blueocean_mcp.telemetry import writer
+from blueocean_mcp.telemetry import db, writer
 
 
 def test_connect_creates_schema() -> None:
@@ -175,10 +174,10 @@ def test_entry_hits_upsert_and_delete() -> None:
             w.record_hits("proj", ["a"], [])
             w.flush()
             conn = db.connect(path)
-            rows = dict(
-                (r[0], (r[1], r[2]))
+            rows = {
+                r[0]: (r[1], r[2])
                 for r in conn.execute("SELECT point_id, hits, full_hits FROM entry_hits")
-            )
+            }
             assert rows["a"] == (2, 1), rows
             assert rows["b"] == (1, 0), rows
             conn.close()

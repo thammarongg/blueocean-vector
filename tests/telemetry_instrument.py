@@ -130,6 +130,63 @@ def test_telemetry_failure_does_not_break_the_tool() -> None:
     print("  OK")
 
 
+def test_client_info_is_recorded() -> None:
+    """The whole point of the audit trail is knowing which agent called.
+    Built from the library's real types on purpose: if the field is renamed
+    again, this test fails instead of identity silently going NULL."""
+    print("== clientInfo lands in agent_name and agent_version ==")
+    from mcp.types import ClientCapabilities, Implementation, InitializeRequestParams
+
+    class FakeSession:
+        client_params = InitializeRequestParams(
+            protocolVersion="2025-11-25",
+            capabilities=ClientCapabilities(),
+            clientInfo=Implementation(name="probe-agent", version="9.9.9"),
+        )
+
+    class FakeCtx:
+        session = FakeSession()
+        headers = {"mcp-session-id": "sess-123"}
+
+    with tempfile.TemporaryDirectory() as d:
+        w = _writer_in(d)
+        try:
+            def memory_demo(project: str) -> dict:
+                """Demo."""
+                return {"ok": True}
+
+            wrapped = instrument(memory_demo, "memory_demo", writer_factory=lambda: w)
+            wrapped(project="p", ctx=FakeCtx())
+            w.flush()
+
+            from blueocean_mcp.telemetry import db
+            conn = db.connect(str(Path(d) / "t.db"))
+            row = conn.execute(
+                "SELECT agent_name, agent_version, session_id FROM events"
+            ).fetchone()
+            assert row == ("probe-agent", "9.9.9", "sess-123"), row
+            conn.close()
+        finally:
+            w.stop()
+    print("  OK")
+
+
+def test_missing_client_info_is_not_fatal() -> None:
+    print("== a client that sends no identity still records the call ==")
+
+    class FakeCtx:
+        session = type("S", (), {"client_params": None})()
+        headers = None
+
+    def memory_demo(project: str) -> dict:
+        """Demo."""
+        return {"ok": True}
+
+    wrapped = instrument(memory_demo, "memory_demo", writer_factory=lambda: None)
+    assert wrapped(project="p", ctx=FakeCtx()) == {"ok": True}
+    print("  OK")
+
+
 def test_memory_usage_is_on_the_denylist() -> None:
     print("== memory_usage is deliberately not instrumented ==")
     assert "memory_usage" in INSTRUMENT_DENYLIST
@@ -225,6 +282,8 @@ def main() -> None:
     test_call_is_recorded_with_timing()
     test_failure_is_recorded_and_reraised()
     test_telemetry_failure_does_not_break_the_tool()
+    test_client_info_is_recorded()
+    test_missing_client_info_is_not_fatal()
     test_memory_usage_is_on_the_denylist()
     test_all_tools_instrumented_except_the_denylist()
     test_usage_accumulates_and_is_isolated_per_call()

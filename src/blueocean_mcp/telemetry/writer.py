@@ -140,7 +140,7 @@ class TelemetryWriter:
             try:
                 conn.close()
             except Exception:  # pragma: no cover
-                pass
+                logger.debug("telemetry connection close failed", exc_info=True)
 
     def _apply(self, conn: sqlite3.Connection, kind: str, payload: Any) -> None:
         if kind == "event":

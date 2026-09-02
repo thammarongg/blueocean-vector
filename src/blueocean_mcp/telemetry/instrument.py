@@ -15,7 +15,8 @@ import functools
 import inspect
 import logging
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from mcp.server.mcpserver import Context
 
@@ -40,16 +41,17 @@ def _agent_identity(ctx: Any) -> dict:
         return out
     try:
         params = ctx.session.client_params
-        if params is not None and params.clientInfo is not None:
-            out["agent_name"] = params.clientInfo.name
-            out["agent_version"] = getattr(params.clientInfo, "version", None)
-    except Exception:  # noqa: BLE001 - identity is optional, never fatal
-        pass
+        info = getattr(params, "client_info", None) or getattr(params, "clientInfo", None)
+        if info is not None:
+            out["agent_name"] = getattr(info, "name", None)
+            out["agent_version"] = getattr(info, "version", None)
+    except Exception:
+        logger.debug("agent client identity unavailable", exc_info=True)
     try:
         headers = ctx.headers or {}
         out["session_id"] = headers.get("mcp-session-id")
-    except Exception:  # noqa: BLE001
-        pass
+    except Exception:
+        logger.debug("agent session identity unavailable", exc_info=True)
     return out
 
 
@@ -105,5 +107,5 @@ def _safe_record(writer_factory: Callable[[], Any], row: dict) -> None:
         w = writer_factory()
         if w is not None:
             w.record(row)
-    except Exception:  # noqa: BLE001 - telemetry never breaks a memory op
+    except Exception:
         logger.debug("telemetry record failed", exc_info=True)
