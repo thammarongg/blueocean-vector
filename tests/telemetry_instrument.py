@@ -278,6 +278,152 @@ def test_bedrock_usage_accumulates_across_texts() -> None:
     print("  OK")
 
 
+def test_search_quality_and_hits_are_recorded() -> None:
+    print("== a search records quality columns and entry_hits ==")
+    with tempfile.TemporaryDirectory() as d:
+        w = _writer_in(d)
+        try:
+            def memory_search(project: str, query: str) -> dict:
+                """Demo."""
+                return {
+                    "summary": [{"id": "a", "score": 0.81}, {"id": "b", "score": 0.77}],
+                    "full": [{"id": "a", "score": 0.81}],
+                    "budget": 2000,
+                    "total_tokens": 121,
+                    "truncated": 0,
+                }
+
+            wrapped = instrument(memory_search, "memory_search", writer_factory=lambda: w)
+            wrapped(project="p", query="anything", ctx=None)
+            w.flush()
+
+            from blueocean_mcp.telemetry import db
+            conn = db.connect(str(Path(d) / "t.db"))
+            count, top, tokens = conn.execute(
+                "SELECT result_count, top_score, tokens_returned FROM events"
+            ).fetchone()
+            assert count == 2, count
+            assert abs(top - 0.81) < 1e-9, top
+            assert tokens == 121, tokens
+            hits = {
+                r[0]: (r[1], r[2])
+                for r in conn.execute("SELECT point_id, hits, full_hits FROM entry_hits")
+            }
+            assert hits["a"] == (1, 1), hits
+            assert hits["b"] == (1, 0), hits
+            conn.close()
+        finally:
+            w.stop()
+    print("  OK")
+
+
+def test_zero_result_search_is_recorded() -> None:
+    print("== a search that finds nothing is still recorded ==")
+    with tempfile.TemporaryDirectory() as d:
+        w = _writer_in(d)
+        try:
+            def memory_search(project: str, query: str) -> dict:
+                """Demo."""
+                return {"summary": [], "full": [], "total_tokens": 0}
+
+            wrapped = instrument(memory_search, "memory_search", writer_factory=lambda: w)
+            wrapped(project="p", query="nothing", ctx=None)
+            w.flush()
+
+            from blueocean_mcp.telemetry import db
+            conn = db.connect(str(Path(d) / "t.db"))
+            count, top = conn.execute("SELECT result_count, top_score FROM events").fetchone()
+            assert count == 0, count
+            assert top is None, "no results means no top score, not a score of 0"
+            conn.close()
+        finally:
+            w.stop()
+    print("  OK")
+
+
+def test_memory_get_counts_as_a_full_hit() -> None:
+    print("== memory_get counts as a full hit ==")
+    with tempfile.TemporaryDirectory() as d:
+        w = _writer_in(d)
+        try:
+            def memory_get(project: str, point_id: str) -> dict:
+                """Demo."""
+                return {"found": True, "content": "x"}
+
+            wrapped = instrument(memory_get, "memory_get", writer_factory=lambda: w)
+            wrapped(project="p", point_id="a", ctx=None)
+            w.flush()
+
+            from blueocean_mcp.telemetry import db
+            conn = db.connect(str(Path(d) / "t.db"))
+            row = conn.execute(
+                "SELECT hits, full_hits FROM entry_hits WHERE point_id = 'a'"
+            ).fetchone()
+            assert row == (1, 1), row
+            conn.close()
+        finally:
+            w.stop()
+    print("  OK")
+
+
+def test_summarize_session_records_its_label() -> None:
+    print("== memory_summarize_session records its agent-declared label ==")
+    with tempfile.TemporaryDirectory() as d:
+        w = _writer_in(d)
+        try:
+            def memory_summarize_session(project: str, area: str, session_id: str,
+                                         observations: list, conclusion: str) -> str:
+                """Demo."""
+                return "point-1"
+
+            instrument(memory_summarize_session, "memory_summarize_session",
+                       writer_factory=lambda: w)(
+                project="p", area="a", session_id="codex-2026-09-02",
+                observations=["x"], conclusion="done", ctx=None,
+            )
+            w.flush()
+
+            from blueocean_mcp.telemetry import db
+            conn = db.connect(str(Path(d) / "t.db"))
+            label = conn.execute("SELECT agent_session_label FROM events").fetchone()[0]
+            assert label == "codex-2026-09-02", label
+            conn.close()
+        finally:
+            w.stop()
+    print("  OK")
+
+
+def test_memory_delete_removes_entry_hits() -> None:
+    print("== memory_delete cleans up its entry_hits row ==")
+    with tempfile.TemporaryDirectory() as d:
+        w = _writer_in(d)
+        try:
+            def memory_get(project: str, point_id: str) -> dict:
+                """Demo."""
+                return {"found": True}
+
+            def memory_delete(project: str, point_id: str) -> bool:
+                """Demo."""
+                return True
+
+            instrument(memory_get, "memory_get", writer_factory=lambda: w)(
+                project="p", point_id="a", ctx=None
+            )
+            instrument(memory_delete, "memory_delete", writer_factory=lambda: w)(
+                project="p", point_id="a", ctx=None
+            )
+            w.flush()
+
+            from blueocean_mcp.telemetry import db
+            conn = db.connect(str(Path(d) / "t.db"))
+            left = conn.execute("SELECT COUNT(*) FROM entry_hits").fetchone()[0]
+            assert left == 0, left
+            conn.close()
+        finally:
+            w.stop()
+    print("  OK")
+
+
 def main() -> None:
     test_ctx_is_injected_and_hidden()
     test_call_is_recorded_with_timing()
@@ -290,6 +436,11 @@ def main() -> None:
     test_usage_accumulates_and_is_isolated_per_call()
     test_estimated_usage_is_flagged_inexact()
     test_bedrock_usage_accumulates_across_texts()
+    test_search_quality_and_hits_are_recorded()
+    test_zero_result_search_is_recorded()
+    test_memory_get_counts_as_a_full_hit()
+    test_summarize_session_records_its_label()
+    test_memory_delete_removes_entry_hits()
     print("\nTELEMETRY INSTRUMENT TEST PASSED")
 
 
