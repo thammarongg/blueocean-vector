@@ -5,12 +5,16 @@ Run with:
     uv run python -m tests.telemetry_db
 """
 
+import importlib
+import os
 import sqlite3
 import tempfile
 import time
 from pathlib import Path
 
+from blueocean_mcp import config
 from blueocean_mcp.telemetry import db
+from blueocean_mcp.telemetry import writer
 
 
 def test_connect_creates_schema() -> None:
@@ -109,11 +113,115 @@ def test_purge_old_deletes_only_expired_events() -> None:
     print("  OK")
 
 
+def test_writer_persists_rows() -> None:
+    print("== writer thread drains the queue into SQLite ==")
+    with tempfile.TemporaryDirectory() as d:
+        path = str(Path(d) / "t.db")
+        w = writer.TelemetryWriter(path)
+        w.start()
+        try:
+            now = int(time.time())
+            w.record({"ts": now, "kind": "tool", "tool": "memory_search", "ok": 1,
+                      "origin": "observed", "result_count": 3})
+            w.flush()
+        finally:
+            w.stop()
+        conn = db.connect(path)
+        row = conn.execute("SELECT tool, result_count FROM events").fetchone()
+        assert row == ("memory_search", 3), row
+        conn.close()
+    print("  OK")
+
+
+def test_writer_drops_oldest_when_full_and_counts() -> None:
+    """A full queue must never block a memory operation. Dropping is the
+    correct behaviour; hiding that it happened is not."""
+    print("== full queue drops oldest and counts the drops ==")
+    with tempfile.TemporaryDirectory() as d:
+        w = writer.TelemetryWriter(str(Path(d) / "t.db"), queue_size=2)
+        # Not started: nothing drains, so the queue fills deterministically.
+        for i in range(5):
+            w.record({"ts": i, "kind": "tool", "tool": "memory_store", "ok": 1})
+        assert w.dropped == 3, w.dropped
+    print("  OK")
+
+
+def test_writer_self_disables_on_failure() -> None:
+    """A broken telemetry backend must degrade to silence, never to an
+    exception on the memory path."""
+    print("== a failing writer self-disables instead of raising ==")
+    with tempfile.TemporaryDirectory() as d:
+        w = writer.TelemetryWriter(str(Path(d) / "t.db"))
+        w.start()
+        try:
+            w.record({"ts": 1, "kind": "tool", "tool": "memory_store",
+                      "nonexistent_column": "boom"})
+            w.flush()
+            assert w.disabled is True, "writer should have disabled itself"
+            w.record({"ts": 2, "kind": "tool", "tool": "memory_store"})  # must not raise
+        finally:
+            w.stop()
+    print("  OK")
+
+
+def test_entry_hits_upsert_and_delete() -> None:
+    print("== entry_hits accumulates and deletes ==")
+    with tempfile.TemporaryDirectory() as d:
+        path = str(Path(d) / "t.db")
+        w = writer.TelemetryWriter(path)
+        w.start()
+        try:
+            w.record_hits("proj", ["a", "b"], ["a"])
+            w.record_hits("proj", ["a"], [])
+            w.flush()
+            conn = db.connect(path)
+            rows = dict(
+                (r[0], (r[1], r[2]))
+                for r in conn.execute("SELECT point_id, hits, full_hits FROM entry_hits")
+            )
+            assert rows["a"] == (2, 1), rows
+            assert rows["b"] == (1, 0), rows
+            conn.close()
+
+            w.delete_hits("proj", ["a"])
+            w.flush()
+            conn = db.connect(path)
+            left = [r[0] for r in conn.execute("SELECT point_id FROM entry_hits")]
+            assert left == ["b"], left
+            conn.close()
+        finally:
+            w.stop()
+    print("  OK")
+
+
+def test_disabled_touches_no_file() -> None:
+    print("== BLUEOCEAN_TELEMETRY=0 opens no database ==")
+    with tempfile.TemporaryDirectory() as d:
+        path = Path(d) / "t.db"
+        os.environ["BLUEOCEAN_TELEMETRY"] = "0"
+        try:
+            importlib.reload(config)
+            importlib.reload(writer)
+            assert writer.is_enabled() is False
+            assert writer.get_writer() is None
+            assert not path.exists()
+        finally:
+            os.environ.pop("BLUEOCEAN_TELEMETRY")
+            importlib.reload(config)
+            importlib.reload(writer)
+    print("  OK")
+
+
 def main() -> None:
     test_connect_creates_schema()
     test_connect_is_idempotent()
     test_migration_is_additive()
     test_purge_old_deletes_only_expired_events()
+    test_writer_persists_rows()
+    test_writer_drops_oldest_when_full_and_counts()
+    test_writer_self_disables_on_failure()
+    test_entry_hits_upsert_and_delete()
+    test_disabled_touches_no_file()
     print("\nTELEMETRY DB TEST PASSED")
 
 

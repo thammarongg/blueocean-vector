@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 DEFAULT_QDRANT_URL = os.getenv("BLUEOCEAN_QDRANT_URL", "http://localhost:6333")
 DEFAULT_EMBEDDING_PROVIDER = os.getenv("BLUEOCEAN_EMBEDDING", "fastembed")
@@ -24,8 +25,6 @@ DEFAULT_HNSW_EF_CONSTRUCT = int(os.getenv("BLUEOCEAN_HNSW_EF_CONSTRUCT", "100"))
 # synchronously at server startup, so a broken load crashes before /health
 # could ever be hit, making a repeated check pointless.
 DEFAULT_HEALTH_EMBED_TTL = float(os.getenv("BLUEOCEAN_HEALTH_EMBED_TTL", "60"))
-
-from pathlib import Path
 
 # Telemetry. Off means off: with BLUEOCEAN_TELEMETRY=0 no database file is
 # ever opened, and the HTTP surface answers 503 rather than 404 -- a 404
