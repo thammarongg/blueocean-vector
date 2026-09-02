@@ -131,43 +131,30 @@ def register_tools(mcp: MCPServer, store: VectorStore) -> None:
         """Admin: collection stats (count, importance/area distribution, size)."""
         return store.stats(project)
 
-    mcp.add_tool(
-        memory_store,
-        name="memory_store",
-        description="Persist a memory entry for a project (content + condensed summary + importance + area/module).",
-    )
-    mcp.add_tool(
-        memory_search,
-        name="memory_search",
-        description="Semantic search a project's memory with token-budgeted return (summary + full layers).",
-    )
-    mcp.add_tool(
-        memory_get,
-        name="memory_get",
-        description="Fetch the full content of a single memory entry by ID.",
-    )
-    mcp.add_tool(
-        memory_delete,
-        name="memory_delete",
-        description="Delete a single memory entry by ID.",
-    )
-    mcp.add_tool(
-        memory_list_projects,
-        name="memory_list_projects",
-        description="List all projects that have a memory collection.",
-    )
-    mcp.add_tool(
-        memory_manifest,
-        name="memory_manifest",
-        description="Show the areas/modules present in a project's memory.",
-    )
-    mcp.add_tool(
-        memory_summarize_session,
-        name="memory_summarize_session",
-        description="Store a condensed summary of a work session for later retrieval.",
-    )
-    mcp.add_tool(
-        memory_stats,
-        name="memory_stats",
-        description="Admin: collection stats (count, importance/area distribution, size).",
-    )
+    from .telemetry.instrument import INSTRUMENT_DENYLIST, instrument
+
+    registrations = [
+        (memory_store, "memory_store",
+         "Persist a memory entry for a project (content + condensed summary + importance + area/module)."),
+        (memory_search, "memory_search",
+         "Semantic search a project's memory with token-budgeted return (summary + full layers)."),
+        (memory_get, "memory_get",
+         "Fetch the full content of a single memory entry by ID."),
+        (memory_delete, "memory_delete",
+         "Delete a single memory entry by ID."),
+        (memory_list_projects, "memory_list_projects",
+         "List all projects that have a memory collection."),
+        (memory_manifest, "memory_manifest",
+         "Show the areas/modules present in a project's memory."),
+        (memory_summarize_session, "memory_summarize_session",
+         "Store a condensed summary of a work session for later retrieval."),
+        (memory_stats, "memory_stats",
+         "Admin: collection stats (count, importance/area distribution, size)."),
+    ]
+
+    # Instrumenting here, in one loop over the registration list, rather than
+    # decorating each function: a tool added later cannot silently vanish from
+    # the stats by someone forgetting a decorator.
+    for fn, name, description in registrations:
+        tool = fn if name in INSTRUMENT_DENYLIST else instrument(fn, name)
+        mcp.add_tool(tool, name=name, description=description)
