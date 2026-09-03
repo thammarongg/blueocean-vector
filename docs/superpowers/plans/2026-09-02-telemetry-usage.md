@@ -2249,10 +2249,12 @@ def test_build_stats_shapes_every_panel() -> None:
              "agent_name": "claude-code", "ok": 1, "total_ms": 40.0,
              "result_count": 2, "top_score": 0.8, "tokens_returned": 100,
              "embed_tokens": 50, "est_cost_usd": 0.000001, "origin": "observed"},
+            # embed_tokens with no est_cost_usd: an embedding we paid for but
+            # could not price. That is what unpriced_calls counts.
             {"ts": now - 30, "kind": "tool", "tool": "memory_search", "project": "p",
              "agent_name": "codex", "ok": 1, "total_ms": 90.0,
              "result_count": 0, "top_score": None, "tokens_returned": 0,
-             "origin": "observed"},
+             "embed_tokens": 30, "origin": "observed"},
             {"ts": now - 10, "kind": "tool", "tool": "memory_store", "project": "p",
              "agent_name": "claude-code", "ok": 0, "error_class": "ValueError",
              "error_msg": "too long", "total_ms": 5.0, "origin": "observed"},
