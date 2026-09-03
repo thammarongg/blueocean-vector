@@ -1052,6 +1052,7 @@ Two things here are load-bearing and easy to "simplify" into a silent bug.
 import functools
 import inspect
 import logging
+import pathlib
 import time
 from typing import Any, Callable
 
@@ -1070,6 +1071,12 @@ _ERROR_MSG_MAX = 200
 
 
 _REDACTED = "<redacted: contained caller text>"
+_REDACTED_FOREIGN = "<redacted: third-party exception>"
+
+# Our own package directory. An exception whose deepest traceback frame is
+# outside it came from a library we call, and those libraries quote the
+# payload they choked on - which is the user's memory.
+_PACKAGE_ROOT = str(pathlib.Path(__file__).resolve().parent.parent)
 
 # Arguments already stored in their own columns, and not content. Excluding
 # them keeps an ordinary message like "collection blueocean_myproject not
@@ -1095,17 +1102,28 @@ def _caller_strings(kwargs: dict) -> list[str]:
     return out
 
 
-def _safe_error_message(exc: Exception, kwargs: dict) -> str | None:
-    """Never echo the caller's own text back into telemetry.
+def _raised_by_us(exc: BaseException) -> bool:
+    """True when the deepest traceback frame is inside this package."""
+    tb, filename = exc.__traceback__, None
+    while tb is not None:
+        filename = tb.tb_frame.f_code.co_filename
+        tb = tb.tb_next
+    return bool(filename) and filename.startswith(_PACKAGE_ROOT)
 
-    Our two raise sites do not embed memory content, but the libraries we call
-    do quote what they choked on, and what they choked on is the user's
-    memory. Rather than audit every dependency's message formatting forever,
-    drop any message that contains a string the caller passed in.
+
+def _safe_error_message(exc: Exception, kwargs: dict) -> str | None:
+    """Never let an exception message carry memory content into telemetry.
+
+    Auditing every dependency's message formatting forever is not a plan, so
+    a message survives only if we raised it ourselves and it does not quote
+    the caller. The cost is accepted: a Qdrant ConnectionError arrives as a
+    class name without its text.
     """
     message = str(exc)
     if not message:
         return None
+    if not _raised_by_us(exc):
+        return _REDACTED_FOREIGN
     for value in _caller_strings(kwargs):
         if len(value) >= _MIN_SENSITIVE_LEN and value in message:
             return _REDACTED

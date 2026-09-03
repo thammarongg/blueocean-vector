@@ -522,11 +522,26 @@ hold for the libraries we call. A `qdrant-client` or embedding-provider
 exception can quote the payload it choked on, and that payload is the user's
 memory. The privacy sentinel test caught exactly this during implementation.
 
-The filter compares against the call's own string arguments, skipping
-`project`, `area` and `module` (already stored in their own columns, and not
-content) and ignoring strings shorter than 8 characters, which would otherwise
-match ordinary English words in an infrastructure message. Messages like
-"Connection refused" survive; a message quoting the stored content does not.
+Two filters, in order.
+
+**Origin.** The message is kept only when the exception was raised inside
+`blueocean_mcp` itself, judged by the deepest frame of its traceback. Anything
+raised by a library we call - `qdrant-client`, an embedding provider - stores
+`<redacted: third-party exception>` and its class, nothing more. This is the
+filter that matters: those libraries quote the payload they choked on, and
+that payload is the user's memory. The cost is real and accepted: a
+`ConnectionError` from Qdrant now reaches the dashboard as a class name
+without its "Connection refused" text.
+
+**Caller text.** For our own exceptions, the message is dropped anyway if it
+contains any string the caller passed in, replaced by
+`<redacted: contained caller text>`. `project`, `area` and `module` are
+skipped (already their own columns, and not content), as are strings shorter
+than 8 characters, which would match ordinary words in an ordinary message.
+
+The origin filter alone would have been enough for the leak the sentinel
+found; the caller-text filter stays because our own `raise` sites take
+user-supplied arguments and could start echoing them at any time.
 
 Failure isolation:
 
