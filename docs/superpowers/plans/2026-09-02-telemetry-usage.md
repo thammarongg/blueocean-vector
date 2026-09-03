@@ -2215,18 +2215,11 @@ Run with:
 """
 
 import json
-import subprocess
 import tempfile
 import time
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 from blueocean_mcp.telemetry import db, queries
-
-from ._helpers import BIN
-
-PORT = 8798
 
 
 def _seed(conn, rows: list[dict]) -> None:
@@ -2384,7 +2377,6 @@ dashboard.
 """
 
 import sqlite3
-import statistics
 import time
 from typing import Any
 
@@ -2399,7 +2391,7 @@ def _percentile(values: list[float], pct: float) -> float | None:
     ordered = sorted(values)
     if len(ordered) == 1:
         return ordered[0]
-    index = min(len(ordered) - 1, int(round((len(ordered) - 1) * pct)))
+    index = min(len(ordered) - 1, round((len(ordered) - 1) * pct))
     return ordered[index]
 
 
@@ -2654,9 +2646,20 @@ git commit -m "Add telemetry aggregation queries and the memory_usage tool"
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/telemetry_http.py` and register in `main()`:
+Append to `tests/telemetry_http.py` and register in `main()`. This step also
+adds the imports its helpers need, which Task 8 deliberately left out rather
+than leaving them unused:
 
 ```python
+import subprocess
+import urllib.error
+import urllib.request
+
+from ._helpers import BIN
+
+PORT = 8798
+
+
 def _start_server(env_extra: dict, token: str | None = None) -> subprocess.Popen:
     import os
     env = {**os.environ, **env_extra}
