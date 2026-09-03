@@ -2290,8 +2290,8 @@ def test_day_bucketing_uses_the_callers_offset() -> None:
     by UTC would file it under the wrong local day and quietly shift every
     daily number."""
     print("== daily buckets follow the caller's offset ==")
-    # 2026-09-02 23:30 in UTC+7 == 2026-09-02 16:30 UTC == epoch 1788449400
-    ts = 1788449400
+    # 2026-09-02 23:30 at UTC+7 == 2026-09-02 16:30 UTC == epoch 1788366600
+    ts = 1788366600
     with tempfile.TemporaryDirectory() as d:
         conn = db.connect(str(Path(d) / "t.db"))
         _seed(conn, [{"ts": ts, "kind": "tool", "tool": "memory_search",
@@ -2304,8 +2304,9 @@ def test_day_bucketing_uses_the_callers_offset() -> None:
         # And an event at 00:30 local (17:30 UTC the previous day) lands on the
         # local day, not the UTC one.
         conn.execute("DELETE FROM events")
-        # 2026-09-02 00:30 in UTC+7 is 2026-09-01 17:30 UTC.
-        _seed(conn, [{"ts": 1788377400, "kind": "tool",
+        # 2026-09-02 00:30 at UTC+7 == 2026-09-01 17:30 UTC == epoch 1788283800.
+        # Local and UTC land on different days, which is the whole point.
+        _seed(conn, [{"ts": 1788283800, "kind": "tool",
                       "tool": "memory_search", "ok": 1, "origin": "observed"}])
         local = queries.build_stats(conn, days=3650, tz_offset_minutes=420)["daily"]
         utc = queries.build_stats(conn, days=3650, tz_offset_minutes=0)["daily"]
