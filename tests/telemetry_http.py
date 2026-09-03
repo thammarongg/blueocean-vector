@@ -5,11 +5,18 @@ Run with:
 """
 
 import json
+import subprocess
 import tempfile
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from blueocean_mcp.telemetry import db, queries
+
+from ._helpers import BIN
+
+PORT = 8798
 
 
 def _seed(conn, rows: list[dict]) -> None:
@@ -133,11 +140,121 @@ def test_usage_summary_view_drilldown() -> None:
     print("  OK")
 
 
+def _start_server(env_extra: dict, token: str | None = None) -> subprocess.Popen:
+    import os
+    env = {**os.environ, **env_extra}
+    args = [BIN, "--transport", "streamable-http", "--host", "127.0.0.1", "--port", str(PORT)]
+    proc = subprocess.Popen(args, env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True)
+    deadline = time.time() + 25
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            _, err = proc.communicate()
+            raise RuntimeError(f"server exited early:\n{err}")
+        try:
+            urllib.request.urlopen(f"http://127.0.0.1:{PORT}/health", timeout=1)
+            return proc
+        except urllib.error.HTTPError:
+            return proc
+        except OSError:
+            time.sleep(0.3)
+    proc.terminate()
+    raise TimeoutError("server did not start")
+
+
+def _get(path: str, token: str | None = None) -> tuple[int, dict | str]:
+    url = f"http://127.0.0.1:{PORT}{path}"
+    req = urllib.request.Request(url)
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            raw = resp.read().decode()
+            try:
+                return resp.status, json.loads(raw)
+            except ValueError:
+                return resp.status, raw
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()
+
+
+def test_stats_requires_a_token() -> None:
+    print("== /api/stats and /dashboard require the token ==")
+    with tempfile.TemporaryDirectory() as d:
+        proc = _start_server({
+            "BLUEOCEAN_AUTH_TOKEN": "secret-token",
+            "BLUEOCEAN_TELEMETRY_DB": str(Path(d) / "t.db"),
+        })
+        try:
+            for path in ("/api/stats", "/dashboard", "/api/audit", "/api/prices"):
+                status, _ = _get(path)
+                assert status == 401, f"{path} returned {status}, expected 401"
+            status, body = _get("/api/stats", token="secret-token")
+            assert status == 200, (status, body)
+            assert "tiles" in body, body
+        finally:
+            proc.terminate()
+            proc.wait(timeout=5)
+    print("  OK")
+
+
+def test_disabled_returns_503_not_404() -> None:
+    """A 404 makes a deliberate configuration look like a broken deployment."""
+    print("== telemetry off answers 503 with an explanation ==")
+    proc = _start_server({"BLUEOCEAN_TELEMETRY": "0", "BLUEOCEAN_AUTH_TOKEN": ""})
+    try:
+        for path in ("/api/stats", "/dashboard"):
+            status, body = _get(path)
+            assert status == 503, f"{path} returned {status}"
+            assert "BLUEOCEAN_TELEMETRY" in str(body), body
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+    print("  OK")
+
+
+def test_audit_row_cannot_claim_to_be_observed() -> None:
+    """One shared token means anyone who can call a tool can post an audit row.
+    The server stamps what it can verify and refuses the rest."""
+    print("== posted audit rows are stamped cli-reported ==")
+    with tempfile.TemporaryDirectory() as d:
+        db_file = str(Path(d) / "t.db")
+        proc = _start_server({
+            "BLUEOCEAN_AUTH_TOKEN": "secret-token",
+            "BLUEOCEAN_TELEMETRY_DB": db_file,
+        })
+        try:
+            payload = json.dumps({
+                "tool": "prune", "project": "p", "deleted_count": 9,
+                "origin": "observed", "ts": 1, "agent_name": "someone-else",
+            }).encode()
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{PORT}/api/audit", data=payload,
+                headers={"Authorization": "Bearer secret-token",
+                         "Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                assert resp.status == 202, resp.status
+            time.sleep(1.0)
+            _, body = _get("/api/stats", token="secret-token")
+            audit = [r for r in body["audit"] if r["tool"] == "prune"]
+            assert audit, body["audit"]
+            assert audit[0]["origin"] == "cli-reported", audit[0]
+            assert audit[0]["ts"] != 1, "the server stamps its own timestamp"
+        finally:
+            proc.terminate()
+            proc.wait(timeout=5)
+    print("  OK")
+
+
 def main() -> None:
     test_build_stats_shapes_every_panel()
     test_day_bucketing_uses_the_callers_offset()
     test_usage_summary_is_small()
     test_usage_summary_view_drilldown()
+    test_stats_requires_a_token()
+    test_disabled_returns_503_not_404()
+    test_audit_row_cannot_claim_to_be_observed()
     print("\nTELEMETRY HTTP TEST PASSED")
 
 

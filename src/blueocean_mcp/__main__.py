@@ -34,6 +34,14 @@ def _serve_http(mcp, host: str, port: int, token: str | None, qdrant_url: str) -
                 build_health_route(qdrant_url, embedding_provider, embedding_model),
             ),
         )
+        # Mounted unconditionally, even when telemetry is disabled: the
+        # handlers themselves answer 503 so a deliberate BLUEOCEAN_TELEMETRY=0
+        # does not look like a broken deployment (which a 404 would).
+        from .telemetry import shutdown
+        from .telemetry.routes import telemetry_routes
+
+        for route in telemetry_routes():
+            mcp_app.router.routes.insert(0, route)
         app = wrap_with_auth(mcp_app, token, exempt_paths=frozenset({"/health"}))
         # access_log=False: uvicorn's default access log prints the full
         # request line, including query string. Codex/Kiro/Cursor can't set
@@ -49,7 +57,10 @@ def _serve_http(mcp, host: str, port: int, token: str | None, qdrant_url: str) -
             access_log=False,
         )
         server = uvicorn.Server(config)
-        await server.serve()
+        try:
+            await server.serve()
+        finally:
+            shutdown()
 
     anyio.run(_run)
 
