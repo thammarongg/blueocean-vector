@@ -29,6 +29,7 @@ If you've ever burned through a context window, opened a different tool, and the
 - [Configuration](#configuration)
 - [Admin CLI](#admin-cli)
 - [Running the tests](#running-the-tests)
+- [Usage telemetry](#usage-telemetry)
 - [Security](#security)
 - [Deploying beyond localhost](#deploying-beyond-localhost)
 - [Gotchas](#a-few-gotchas-worth-knowing-before-you-touch-this)
@@ -225,6 +226,51 @@ uv run python -m tests.health   # /health diagnostics + the cloud-provider self-
 ```
 
 `tests/auth.py` specifically checks that unauthenticated and wrong-token requests get rejected (401) and that a correct token works via both the header and the `?token=` query-param path.
+
+---
+
+## Usage telemetry
+
+Every MCP tool call is recorded to a local SQLite event log: which tool, which
+project, which agent (from the MCP `clientInfo` handshake), how long it took,
+whether it failed, how many results a search returned, and what the embedding
+cost. It is on by default and never leaves the machine.
+
+It never stores query text, memory content, summaries, entry metadata, or
+bearer tokens. A test asserts this by pushing unique sentinel strings through
+every input and dumping every column to prove they are absent.
+
+Turn it off with `BLUEOCEAN_TELEMETRY=0`, in which case no database file is
+opened and the HTTP endpoints answer 503.
+
+Three ways to read it:
+
+```bash
+# From the terminal (reads over HTTP; the server owns the file)
+uv run blueocean-admin usage --days 7 --by tool
+uv run blueocean-admin usage --unused     # entries never retrieved
+
+# In the browser
+open "http://127.0.0.1:8765/dashboard?token=$BLUEOCEAN_AUTH_TOKEN"
+```
+
+Agents can call the `memory_usage` tool, which returns a compact summary
+inside a token budget, with `view="unused" | "tools" | "errors"` for detail.
+
+Embedding prices come from a small built-in table. To refresh them from
+OpenRouter's public embedding price feed:
+
+```bash
+uv run blueocean-admin usage --refresh-prices
+```
+
+That is the only command in the project that sends anything off the machine.
+The server never calls out on its own.
+
+Note on the audit trail: destructive operations are recorded, and rows the
+server observed itself are distinguished from rows a client reported. With a
+single shared auth token this explains accidents; it cannot prove a row was
+not forged.
 
 ---
 

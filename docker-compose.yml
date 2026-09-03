@@ -35,11 +35,21 @@ services:
       - "8765"
       - "--qdrant-url"
       - "http://qdrant:6333"
+    volumes:
+      # A bind mount rather than a named volume so the host can back the file
+      # up and inspect it. The service had no volumes at all, so a telemetry
+      # database written inside the container died on every rebuild.
+      - ./data:/data
     environment:
       # Bearer token required on every request, read from .env at the repo
       # root. Empty/unset = no auth. Generate one with:
       #   uv run blueocean-admin generate-token --write-env
       - BLUEOCEAN_AUTH_TOKEN=${BLUEOCEAN_AUTH_TOKEN:-}
+      # Both files live in the bind mount, and the SERVER is the only process
+      # that opens them: SQLite locking is not dependable across this mount,
+      # so blueocean-admin reads over HTTP instead.
+      - BLUEOCEAN_TELEMETRY_DB=/data/telemetry.db
+      - BLUEOCEAN_PRICING_FILE=/data/pricing.json
     ports:
       - "8765:8765"
     healthcheck:

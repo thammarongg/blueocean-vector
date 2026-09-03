@@ -25,3 +25,6 @@ wheels/
 
 # Local research notes
 /docs/vector-db-comparison.md
+
+# Telemetry database and price cache, bind-mounted into the container.
+data/

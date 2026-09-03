@@ -31,7 +31,7 @@ RUN python -c "from fastembed import TextEmbedding; TextEmbedding(model_name='in
 # needs to be writable too, not just readable, or it logs (harmless but
 # noisy) "Ignoring corrupted tree cache file: Permission denied" warnings.
 RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser && \
-    chown -R appuser:appuser /app && \
+    mkdir -p /data && chown -R appuser:appuser /app /data && \
     chmod -R a+rwX /tmp/fastembed_cache
 USER appuser
 
