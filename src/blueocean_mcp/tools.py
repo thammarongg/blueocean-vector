@@ -131,6 +131,26 @@ def register_tools(mcp: MCPServer, store: VectorStore) -> None:
         """Admin: collection stats (count, importance/area distribution, size)."""
         return store.stats(project)
 
+    def memory_usage(days: int = 7, view: str | None = None) -> dict:
+        """Report how memory has been used recently: call counts, latency,
+        search quality, embedding cost, and entries never retrieved.
+
+        Defaults to a compact summary over the last 7 days. Pass ``view`` as
+        ``"unused"``, ``"tools"`` or ``"errors"`` for one drill-down list.
+        Returns ``{"enabled": False}`` when telemetry is switched off.
+        """
+        from .telemetry import db as telemetry_db
+        from .telemetry import is_enabled
+        from .telemetry.queries import build_usage_summary
+
+        if not is_enabled():
+            return {"enabled": False, "reason": "BLUEOCEAN_TELEMETRY=0"}
+        conn = telemetry_db.connect()
+        try:
+            return build_usage_summary(conn, days=days, view=view)
+        finally:
+            conn.close()
+
     from .telemetry.instrument import INSTRUMENT_DENYLIST, instrument
 
     registrations = [
@@ -150,6 +170,8 @@ def register_tools(mcp: MCPServer, store: VectorStore) -> None:
          "Store a condensed summary of a work session for later retrieval."),
         (memory_stats, "memory_stats",
          "Admin: collection stats (count, importance/area distribution, size)."),
+        (memory_usage, "memory_usage",
+         "Report recent memory usage: calls, latency, search quality, cost, unused entries."),
     ]
 
     # Instrumenting here, in one loop over the registration list, rather than
