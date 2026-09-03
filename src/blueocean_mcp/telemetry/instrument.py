@@ -14,6 +14,7 @@ Two things here are load-bearing and easy to "simplify" into a silent bug.
 import functools
 import inspect
 import logging
+import pathlib
 import time
 from collections.abc import Callable
 from typing import Any
@@ -33,6 +34,66 @@ logger = logging.getLogger(__name__)
 INSTRUMENT_DENYLIST = frozenset({"memory_usage"})
 
 _ERROR_MSG_MAX = 200
+
+
+_REDACTED = "<redacted: contained caller text>"
+_REDACTED_FOREIGN = "<redacted: third-party exception>"
+
+# Our own package directory. An exception whose deepest traceback frame is
+# outside it came from a library we call, and those libraries quote the
+# payload they choked on - which is the user's memory.
+_PACKAGE_ROOT = str(pathlib.Path(__file__).resolve().parent.parent)
+
+# Arguments already stored in their own columns, and not content. Excluding
+# them keeps an ordinary message like "collection blueocean_myproject not
+# found" readable instead of redacting it for naming the project.
+_NON_SENSITIVE_KEYS = frozenset({"project", "area", "module"})
+
+# Below this length a caller argument matches ordinary words in an
+# infrastructure message and would redact everything.
+_MIN_SENSITIVE_LEN = 8
+
+
+def _caller_strings(kwargs: dict) -> list[str]:
+    out: list[str] = []
+    for key, value in kwargs.items():
+        if key in _NON_SENSITIVE_KEYS:
+            continue
+        if isinstance(value, str):
+            out.append(value)
+        elif isinstance(value, (list, tuple)):
+            out.extend(v for v in value if isinstance(v, str))
+        elif isinstance(value, dict):
+            out.extend(str(v) for v in value.values())
+    return out
+
+
+def _raised_by_us(exc: BaseException) -> bool:
+    """True when the deepest traceback frame is inside this package."""
+    tb, filename = exc.__traceback__, None
+    while tb is not None:
+        filename = tb.tb_frame.f_code.co_filename
+        tb = tb.tb_next
+    return bool(filename) and filename.startswith(_PACKAGE_ROOT)
+
+
+def _safe_error_message(exc: Exception, kwargs: dict) -> str | None:
+    """Never let an exception message carry memory content into telemetry.
+
+    Auditing every dependency's message formatting forever is not a plan, so
+    a message survives only if we raised it ourselves and it does not quote
+    the caller. The cost is accepted: a Qdrant ConnectionError arrives as a
+    class name without its text.
+    """
+    message = str(exc)
+    if not message:
+        return None
+    if not _raised_by_us(exc):
+        return _REDACTED_FOREIGN
+    for value in _caller_strings(kwargs):
+        if len(value) >= _MIN_SENSITIVE_LEN and value in message:
+            return _REDACTED
+    return message[:_ERROR_MSG_MAX]
 
 
 def _agent_identity(ctx: Any) -> dict:
@@ -144,7 +205,7 @@ def instrument(
         except Exception as exc:
             row["ok"] = 0
             row["error_class"] = type(exc).__name__
-            row["error_msg"] = str(exc)[:_ERROR_MSG_MAX]
+            row["error_msg"] = _safe_error_message(exc, kwargs)
             row["total_ms"] = (time.perf_counter() - started) * 1000
             row.update(usage.take())
             _price(row)

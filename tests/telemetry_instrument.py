@@ -105,10 +105,91 @@ def test_failure_is_recorded_and_reraised() -> None:
             ).fetchone()
             assert ok == 0, ok
             assert cls == "ValueError", cls
-            assert len(msg) == 200, f"error_msg must be truncated to 200 chars, got {len(msg)}"
+            assert msg == "<redacted: third-party exception>", msg
             conn.close()
         finally:
             w.stop()
+    print("  OK")
+
+
+def test_error_message_redacts_caller_text() -> None:
+    print("== caller text is redacted from recorded error messages ==")
+
+    from blueocean_mcp.config import MAX_CONTENT_CHARS
+    from blueocean_mcp.embeddings import create_embedder
+    from blueocean_mcp.vector_store import VectorStore, collection_name
+
+    class Capture:
+        def __init__(self):
+            self.rows = []
+
+        def record(self, row):
+            self.rows.append(row)
+
+    def capture_call(fn, **kwargs) -> dict:
+        capture = Capture()
+        wrapped = instrument(fn, "memory_demo", writer_factory=lambda: capture)
+        try:
+            wrapped(**kwargs, ctx=None)
+        except ValueError:
+            pass
+        assert len(capture.rows) == 1, capture.rows
+        return capture.rows[0]
+
+    caller_text = "caller-secret-content-123"
+    row = capture_call(create_embedder, provider=caller_text)
+    assert row["error_msg"] == "<redacted: contained caller text>", row
+    assert row["error_class"] == "ValueError", row
+
+    store = VectorStore.__new__(VectorStore)
+    content = "unrelated caller text" * (MAX_CONTENT_CHARS // 10)
+    row = capture_call(
+        store.store,
+        project="p",
+        area="a",
+        module="m",
+        content=content,
+        summary="s",
+        importance=3,
+    )
+    assert row["error_msg"] == (
+        f"content is {len(content)} chars, over the {MAX_CONTENT_CHARS}-char "
+        "limit (BLUEOCEAN_MAX_CONTENT_CHARS) -- shorten it or split it into "
+        "multiple entries"
+    ), row
+    assert row["error_class"] == "ValueError", row
+
+    project = "Long Project Name"
+    row = capture_call(collection_name, project=project)
+    assert project in row["error_msg"], row
+    assert row["error_class"] == "ValueError", row
+    print("  OK")
+
+
+def test_exception_raised_in_test_helper_is_redacted_by_origin() -> None:
+    print("== an exception raised outside the package is redacted by origin ==")
+
+    class Capture:
+        def __init__(self):
+            self.rows = []
+
+        def record(self, row):
+            self.rows.append(row)
+
+    def third_party_helper() -> None:
+        raise RuntimeError("private datastore payload")
+
+    capture = Capture()
+    wrapped = instrument(third_party_helper, "memory_demo", writer_factory=lambda: capture)
+    try:
+        wrapped(ctx=None)
+    except RuntimeError:
+        pass
+
+    assert len(capture.rows) == 1, capture.rows
+    row = capture.rows[0]
+    assert row["error_msg"] == "<redacted: third-party exception>", row
+    assert row["error_class"] == "RuntimeError", row
     print("  OK")
 
 
@@ -428,6 +509,8 @@ def main() -> None:
     test_ctx_is_injected_and_hidden()
     test_call_is_recorded_with_timing()
     test_failure_is_recorded_and_reraised()
+    test_error_message_redacts_caller_text()
+    test_exception_raised_in_test_helper_is_redacted_by_origin()
     test_telemetry_failure_does_not_break_the_tool()
     test_client_info_is_recorded()
     test_missing_client_info_is_not_fatal()
