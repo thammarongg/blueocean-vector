@@ -265,7 +265,11 @@ def _price(row: dict) -> None:
         # every OpenAI/Bedrock call would be priced at fastembed's $0.00.
         provider = os.getenv("BLUEOCEAN_EMBEDDING") or DEFAULT_EMBEDDING_PROVIDER
         model = resolve_embedding_model(provider)
-        price, source = pricing.resolve(provider, model)
+        # Mirrors BedrockEmbedder.__init__ exactly. create_embedder() passes no
+        # region, so this env read IS the region the calls actually went to;
+        # reading it any other way reintroduces the stale-provider bug above.
+        region = os.getenv("AWS_REGION", "us-east-1") if provider == "bedrock" else None
+        price, source = pricing.resolve(provider, model, region=region)
     except Exception:
         logger.debug("telemetry price lookup failed", exc_info=True)
         return

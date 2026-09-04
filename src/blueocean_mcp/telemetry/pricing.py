@@ -23,7 +23,15 @@ BUILTIN_PRICES: dict[tuple[str, str], float] = {
     ("openai", "text-embedding-3-small"): 0.02,
     ("openai", "text-embedding-3-large"): 0.13,
     ("openai", "text-embedding-ada-002"): 0.10,
-    ("bedrock", "amazon.titan-embed-text-v2:0"): 0.02,
+}
+
+# Bedrock alone is priced per region, so it gets its own (model, region) table
+# rather than widening the key above for the one provider that needs it. A
+# region that is not listed here yields NULL: quoting us-east-1's number for
+# eu-west-1 would be a confidently wrong bill, and NULL already means
+# "unknown" everywhere else in this file.
+BEDROCK_PRICES: dict[tuple[str, str], float] = {
+    ("amazon.titan-embed-text-v2:0", "us-east-1"): 0.02,
 }
 
 # Local providers cost nothing, whatever a hosted feed says about the same
@@ -68,9 +76,15 @@ def write_file(path: str | None, prices: dict[str, float]) -> None:
 
 
 def resolve(
-    provider: str, model: str, pricing_file: str | None = None
+    provider: str,
+    model: str,
+    pricing_file: str | None = None,
+    region: str | None = None,
 ) -> tuple[float | None, str | None]:
-    """Return (USD per 1M input tokens, source) or (None, None) when unknown."""
+    """Return (USD per 1M input tokens, source) or (None, None) when unknown.
+
+    `region` is consulted for Bedrock only, and an unknown region is NULL.
+    """
     override = os.getenv(_env_key(provider, model))
     if override is not None:
         try:
@@ -81,12 +95,18 @@ def resolve(
     if provider in _LOCAL_PROVIDERS:
         return 0.0, "builtin"
 
-    if provider != "bedrock":
-        # OpenRouter ids are "<vendor>/<model>", which matches OpenAI's model
-        # names directly. Bedrock is not carried by the feed at all.
-        from_file = load_file(pricing_file).get(f"{provider}/{model}")
-        if from_file is not None:
-            return from_file, "openrouter"
+    if provider == "bedrock":
+        if region is None:
+            return None, None
+        price = BEDROCK_PRICES.get((model, region))
+        return (price, "builtin") if price is not None else (None, None)
+
+    # OpenRouter ids are "<vendor>/<model>", which matches OpenAI's model names
+    # directly. Bedrock is not carried by the feed at all, and has already
+    # returned above.
+    from_file = load_file(pricing_file).get(f"{provider}/{model}")
+    if from_file is not None:
+        return from_file, "openrouter"
 
     builtin = BUILTIN_PRICES.get((provider, model))
     if builtin is not None:

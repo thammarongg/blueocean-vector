@@ -17,7 +17,21 @@ def test_builtin_prices_match_the_spec() -> None:
     assert pricing.BUILTIN_PRICES[("openai", "text-embedding-3-small")] == 0.02
     assert pricing.BUILTIN_PRICES[("openai", "text-embedding-3-large")] == 0.13
     assert pricing.BUILTIN_PRICES[("openai", "text-embedding-ada-002")] == 0.10
-    assert pricing.BUILTIN_PRICES[("bedrock", "amazon.titan-embed-text-v2:0")] == 0.02
+    assert pricing.BEDROCK_PRICES[("amazon.titan-embed-text-v2:0", "us-east-1")] == 0.02
+    print("  OK")
+
+
+def test_bedrock_price_is_per_region() -> None:
+    """Bedrock is priced per region. The table was keyed (provider, model)
+    only, so every region silently got us-east-1's number -- a confident,
+    wrong bill for anyone running in eu-west-1 or ap-southeast-1. The spec
+    asks an unlisted region to yield NULL rather than a guess.
+    """
+    print("== an unlisted Bedrock region yields NULL, not us-east-1's price ==")
+    titan = "amazon.titan-embed-text-v2:0"
+    assert pricing.resolve("bedrock", titan, region="us-east-1") == (0.02, "builtin")
+    assert pricing.resolve("bedrock", titan, region="eu-west-1") == (None, None)
+    assert pricing.resolve("bedrock", titan, region=None) == (None, None)
     print("  OK")
 
 

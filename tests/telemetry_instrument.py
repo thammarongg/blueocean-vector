@@ -284,6 +284,53 @@ def test_price_follows_the_running_provider_not_the_import_time_default() -> Non
     print("  OK")
 
 
+def test_bedrock_in_an_unpriced_region_costs_null_not_us_east_1() -> None:
+    """The price table had no region, so a Bedrock deployment in eu-west-1 was
+    billed at us-east-1's rate. Unknown must stay NULL: it shows up in
+    `unpriced_calls`, where someone can see it and fix the table."""
+    print("== Bedrock outside a priced region records no cost ==")
+    import os
+
+    from blueocean_mcp.telemetry import usage
+
+    class Capture:
+        def __init__(self):
+            self.rows = []
+
+        def record(self, row):
+            self.rows.append(row)
+
+    def memory_demo(project: str) -> dict:
+        """Demo."""
+        usage.add(1_000_000, 1.0, exact=True)
+        return {"ok": True}
+
+    previous = {k: os.environ.get(k) for k in ("BLUEOCEAN_EMBEDDING", "AWS_REGION")}
+    os.environ["BLUEOCEAN_EMBEDDING"] = "bedrock"
+    try:
+        rows = {}
+        for region in ("us-east-1", "eu-west-1"):
+            os.environ["AWS_REGION"] = region
+            capture = Capture()
+            wrapped = instrument(memory_demo, "memory_demo",
+                                 writer_factory=lambda c=capture: c)
+            wrapped(project="p", ctx=None)
+            rows[region] = capture.rows[0]
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+    assert rows["us-east-1"]["est_cost_usd"] == 0.02, rows["us-east-1"]
+    assert rows["eu-west-1"].get("est_cost_usd") is None, (
+        f"eu-west-1 is not in the table; it must not inherit us-east-1's price: "
+        f"{rows['eu-west-1']}"
+    )
+    print("  OK")
+
+
 def test_stdio_falls_back_to_a_per_process_session_id() -> None:
     """On stdio there are no HTTP headers, so `ctx.headers` is None and
     session_id went NULL -- every stdio call in every process indistinguishable
@@ -630,6 +677,7 @@ def main() -> None:
     test_telemetry_failure_does_not_break_the_tool()
     test_broken_pricing_does_not_break_the_tool()
     test_price_follows_the_running_provider_not_the_import_time_default()
+    test_bedrock_in_an_unpriced_region_costs_null_not_us_east_1()
     test_stdio_falls_back_to_a_per_process_session_id()
     test_client_info_is_recorded()
     test_missing_client_info_is_not_fatal()
