@@ -317,10 +317,16 @@ livenessProbe:
   httpGet: { path: /health, port: 8765 }
 ```
 
-**Linux bind-mount ownership.** The container runs as uid 10001 (`appuser` in the `Dockerfile`) and writes its telemetry database and pricing file into the `./data` bind mount. On macOS, Docker Desktop maps bind-mount ownership to the host user, so this is invisible. On Linux the container's uid is the file's uid, and a `./data` directory created by your normal user (typically uid 1000) is not writable by 10001 — the server starts but telemetry stays empty. After the first `docker compose up`, hand the directory over once:
+**Linux bind-mount ownership.** The container runs as uid 10001 (`appuser` in the `Dockerfile`) and writes its telemetry database and pricing file into the `./data` bind mount. On macOS, Docker Desktop maps bind-mount ownership to the host user, so this is invisible. On Linux the container's uid is the file's uid, and a `./data` directory created by your normal user (typically uid 1000) is not writable by 10001. Create and hand over the directory **before** the first `docker compose up`:
 
 ```bash
 mkdir -p data && sudo chown -R 10001:10001 data
+```
+
+If the stack already started with a wrongly-owned `./data`, chown is not enough on its own: after a failed open, `TelemetryWriter` disables itself for the life of that process, so telemetry stays empty even once the permission is fixed. Chown, then restart the service:
+
+```bash
+sudo chown -R 10001:10001 data && docker compose restart blueocean-mcp
 ```
 
 (`chgrp` + `chmod g+rwx` works too if you would rather keep the directory owned by yourself; the server only needs to create and write files inside it. Hosts that need to inspect `data/telemetry.db` should do it read-only — see the note in "Usage telemetry" about SQLite locking across bind mounts.)

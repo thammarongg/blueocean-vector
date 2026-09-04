@@ -2835,6 +2835,11 @@ async def _audit(request: Request) -> JSONResponse:
     origin='observed': that value is reserved for calls this process handled
     itself. With one shared token this is the strongest guarantee available,
     and the docs say so rather than implying more.
+
+    A posted error_msg is discarded, not stored: unlike server-observed
+    messages (sanitized on the way in by the wrapper), it is arbitrary
+    caller text and the privacy hard rule says caller text never reaches
+    the database. The row is still accepted with error_class intact.
     """
     if not is_enabled():
         return _disabled()
@@ -2847,12 +2852,12 @@ async def _audit(request: Request) -> JSONResponse:
 
     import time as _time
 
+    # No error_msg here, on purpose: see the docstring above.
     allowed = {"tool", "project", "area", "module", "deleted_count", "ok",
-               "error_class", "error_msg", "agent_name"}
+               "error_class", "agent_name"}
     row = {k: v for k, v in payload.items() if k in allowed}
     if not row.get("tool"):
         return JSONResponse({"error": "tool is required"}, 400)
-    row["error_msg"] = (str(row["error_msg"])[:200] if row.get("error_msg") else None)
     row["ts"] = int(_time.time())
     row["kind"] = "admin"
     row["origin"] = "cli-reported"

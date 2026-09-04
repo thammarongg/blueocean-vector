@@ -17,8 +17,11 @@ from ..config import DEFAULT_TELEMETRY_DB
 SCHEMA_VERSION = 2
 
 # Version-gated data migrations, keyed by the version they upgrade FROM.
-# Everything that runs only on an upgrade (never on a fresh database, never
-# twice) lives here, separate from the additive column walk below.
+# Each statement runs once per database lifetime: after the walk below,
+# user_version equals SCHEMA_VERSION, so a reopened database never repeats
+# it. A fresh database (user_version 0) is treated as upgrading from v1, so
+# its statements do run - harmlessly, against a table created empty one
+# screen above - rather than special-casing 0.
 #
 # v1 -> v2: cli-reported audit rows stored the caller's error_msg verbatim
 # (routes.py now discards it), so rows already on disk may carry memory or
@@ -121,8 +124,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     )
     for name, target in _INDEXES:
         conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {target}")
-    # 0 is a fresh database: the events table above was just created empty,
-    # so there is no old data to sweep.
+    # A fresh database (0) is clamped to 1: it walks the same sweep chain
+    # as a real v1 database, and the v1 UPDATE simply matches nothing
+    # against the empty table created just above.
     for version in range(max(from_version, 1), SCHEMA_VERSION):
         for statement in _DATA_MIGRATIONS.get(version, []):
             conn.execute(statement)
