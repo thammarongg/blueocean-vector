@@ -14,6 +14,7 @@ Two things here are load-bearing and easy to "simplify" into a silent bug.
 import functools
 import inspect
 import logging
+import os
 import pathlib
 import time
 from collections.abc import Callable
@@ -249,7 +250,11 @@ def _price(row: dict) -> None:
     # Leaving the row unpriced is the right failure: NULL means unknown, which
     # is what we actually know here, and 0.0 would invent a free call.
     try:
-        provider = DEFAULT_EMBEDDING_PROVIDER
+        # Read the environment at call time, the way /health does. __main__
+        # applies --embedding to os.environ only AFTER config was imported, so
+        # the module-level default is stale whenever the flag is used, and
+        # every OpenAI/Bedrock call would be priced at fastembed's $0.00.
+        provider = os.getenv("BLUEOCEAN_EMBEDDING") or DEFAULT_EMBEDDING_PROVIDER
         model = resolve_embedding_model(provider)
         price, source = pricing.resolve(provider, model)
     except Exception:

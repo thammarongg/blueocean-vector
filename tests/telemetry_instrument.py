@@ -239,6 +239,51 @@ def test_broken_pricing_does_not_break_the_tool() -> None:
     print("  OK")
 
 
+def test_price_follows_the_running_provider_not_the_import_time_default() -> None:
+    """`--embedding openai` sets BLUEOCEAN_EMBEDDING in __main__ AFTER config
+    has already been imported, so the module-level default is stale by then.
+    Pricing off that constant billed every OpenAI and Bedrock call at
+    fastembed's $0.00 -- a paid provider silently reported as free. /health
+    re-reads the environment, so it was right while telemetry was wrong.
+    """
+    print("== the price follows the provider actually running ==")
+    import os
+
+    from blueocean_mcp.telemetry import usage
+
+    class Capture:
+        def __init__(self):
+            self.rows = []
+
+        def record(self, row):
+            self.rows.append(row)
+
+    def memory_demo(project: str) -> dict:
+        """Demo."""
+        usage.add(1_000_000, 1.0, exact=True)
+        return {"ok": True}
+
+    previous = os.environ.get("BLUEOCEAN_EMBEDDING")
+    os.environ["BLUEOCEAN_EMBEDDING"] = "openai"
+    try:
+        capture = Capture()
+        wrapped = instrument(memory_demo, "memory_demo", writer_factory=lambda: capture)
+        wrapped(project="p", ctx=None)
+    finally:
+        if previous is None:
+            os.environ.pop("BLUEOCEAN_EMBEDDING", None)
+        else:
+            os.environ["BLUEOCEAN_EMBEDDING"] = previous
+
+    row = capture.rows[0]
+    assert row["unit_price_per_1m"] == 0.02, row
+    assert row["price_source"] == "builtin", row
+    assert row["est_cost_usd"] == 0.02, (
+        f"1M tokens on text-embedding-3-small is $0.02, not {row['est_cost_usd']}"
+    )
+    print("  OK")
+
+
 def test_client_info_is_recorded() -> None:
     """The whole point of the audit trail is knowing which agent called.
     Built from the library's real types on purpose: if the field is renamed
@@ -540,6 +585,7 @@ def main() -> None:
     test_exception_raised_in_test_helper_is_redacted_by_origin()
     test_telemetry_failure_does_not_break_the_tool()
     test_broken_pricing_does_not_break_the_tool()
+    test_price_follows_the_running_provider_not_the_import_time_default()
     test_client_info_is_recorded()
     test_missing_client_info_is_not_fatal()
     test_memory_usage_is_on_the_denylist()
