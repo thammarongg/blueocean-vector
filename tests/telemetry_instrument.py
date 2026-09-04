@@ -284,6 +284,50 @@ def test_price_follows_the_running_provider_not_the_import_time_default() -> Non
     print("  OK")
 
 
+def test_stdio_falls_back_to_a_per_process_session_id() -> None:
+    """On stdio there are no HTTP headers, so `ctx.headers` is None and
+    session_id went NULL -- every stdio call in every process indistinguishable
+    from every other. The spec asks for a per-process UUID generated at
+    startup to stand in, which at least groups one process's calls together.
+    """
+    print("== stdio calls share a per-process session id ==")
+    from mcp.types import ClientCapabilities, Implementation, InitializeRequestParams
+
+    class FakeSession:
+        client_params = InitializeRequestParams(
+            protocolVersion="2025-11-25",
+            capabilities=ClientCapabilities(),
+            clientInfo=Implementation(name="stdio-agent", version="1.0.0"),
+        )
+
+    class StdioCtx:
+        session = FakeSession()
+        headers = None  # exactly what the stdio transport gives us
+
+    class Capture:
+        def __init__(self):
+            self.rows = []
+
+        def record(self, row):
+            self.rows.append(row)
+
+    def memory_demo(project: str) -> dict:
+        """Demo."""
+        return {"ok": True}
+
+    capture = Capture()
+    wrapped = instrument(memory_demo, "memory_demo", writer_factory=lambda: capture)
+    wrapped(project="p", ctx=StdioCtx())
+    wrapped(project="p", ctx=StdioCtx())
+
+    first, second = capture.rows[0]["session_id"], capture.rows[1]["session_id"]
+    assert first, f"stdio session_id must not be NULL, got {first!r}"
+    assert first == second, (
+        f"two calls in one process must share a session id: {first!r} vs {second!r}"
+    )
+    print("  OK")
+
+
 def test_client_info_is_recorded() -> None:
     """The whole point of the audit trail is knowing which agent called.
     Built from the library's real types on purpose: if the field is renamed
@@ -586,6 +630,7 @@ def main() -> None:
     test_telemetry_failure_does_not_break_the_tool()
     test_broken_pricing_does_not_break_the_tool()
     test_price_follows_the_running_provider_not_the_import_time_default()
+    test_stdio_falls_back_to_a_per_process_session_id()
     test_client_info_is_recorded()
     test_missing_client_info_is_not_fatal()
     test_memory_usage_is_on_the_denylist()

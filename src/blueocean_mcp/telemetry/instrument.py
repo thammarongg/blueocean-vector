@@ -17,6 +17,7 @@ import logging
 import os
 import pathlib
 import time
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -35,6 +36,10 @@ logger = logging.getLogger(__name__)
 INSTRUMENT_DENYLIST = frozenset({"memory_usage"})
 
 _ERROR_MSG_MAX = 200
+
+# Generated once at import. Stands in for the transport session id on stdio,
+# where there are no headers to carry one.
+_PROCESS_SESSION_ID = uuid.uuid4().hex
 
 
 _REDACTED = "<redacted: contained caller text>"
@@ -113,7 +118,11 @@ def _agent_identity(ctx: Any) -> dict:
         logger.debug("agent client identity unavailable", exc_info=True)
     try:
         headers = ctx.headers or {}
-        out["session_id"] = headers.get("mcp-session-id")
+        # streamable-http issues an mcp-session-id and the client echoes it
+        # back. stdio has no headers at all, so without the fallback every
+        # stdio call in every process recorded NULL and was indistinguishable
+        # from every other. The process id at least groups one run together.
+        out["session_id"] = headers.get("mcp-session-id") or _PROCESS_SESSION_ID
     except Exception:
         logger.debug("agent session identity unavailable", exc_info=True)
     return out
