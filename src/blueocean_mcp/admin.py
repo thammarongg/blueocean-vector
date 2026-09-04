@@ -43,11 +43,17 @@ def _client() -> QdrantClient:
     )
 
 
-def _report_audit(row: dict) -> None:
-    """Send an audit row to the server. If the server is not reachable we do
-    NOT write the file: that would be a silent fallback to the host's default
-    path while the real database lives at the container's, producing a record
-    nobody ever reads. Print it instead so the operator still has it."""
+def _report_audit(row: dict) -> bool:
+    """Send an audit row to the server, returning whether it was recorded.
+
+    If the server is not reachable we do NOT write the file: that would be a
+    silent fallback to the host's default path while the real database lives
+    at the container's, producing a record nobody ever reads. Print it instead
+    so the operator still has it.
+
+    The caller is expected to exit non-zero on a False. A nightly prune that
+    exits 0 would never reveal that its audit trail has a hole in it.
+    """
     from .telemetry import client
 
     try:
@@ -55,6 +61,8 @@ def _report_audit(row: dict) -> None:
     except client.ServerUnavailable as e:
         print(f"warning: audit row not recorded ({e})", file=sys.stderr)
         print(json.dumps({"unrecorded_audit": row}), file=sys.stderr)
+        return False
+    return True
 
 
 def cmd_stats(args: argparse.Namespace) -> None:
@@ -140,10 +148,13 @@ def cmd_prune(args: argparse.Namespace) -> None:
             collection_name=name,
             points_selector=to_delete,
         )
-    if not args.dry_run:
-        _report_audit(
-            {"tool": "prune", "project": args.project, "deleted_count": len(to_delete)}
-        )
+    if not args.dry_run and not _report_audit(
+        {"tool": "prune", "project": args.project, "deleted_count": len(to_delete)}
+    ):
+        # The prune above already happened and stays done: an unreachable
+        # telemetry server must not be able to block a destructive operation
+        # that has nothing to do with it. Only the exit code carries the fault.
+        raise SystemExit(1)
 
 
 def cmd_snapshot(args: argparse.Namespace) -> None:
@@ -213,7 +224,7 @@ def cmd_restore(args: argparse.Namespace) -> None:
         )
     info = client.get_collection(name)
     print(f"Restored project {args.project!r}: {info.points_count} points.")
-    _report_audit(
+    recorded = _report_audit(
         {"tool": "restore", "project": args.project, "deleted_count": info.points_count}
     )
 
@@ -228,6 +239,11 @@ def cmd_restore(args: argparse.Namespace) -> None:
             client.delete_snapshot(collection_name=name, snapshot_name=leftover.name)
         except Exception as e:
             print(f"Warning: could not clean up leftover snapshot {leftover.name!r}: {e}")
+
+    # Raised only after the cleanup above: an unrecorded audit row must not
+    # cost us the orphaned-blob sweep that every restore depends on.
+    if not recorded:
+        raise SystemExit(1)
 
 
 def cmd_generate_token(args: argparse.Namespace) -> None:

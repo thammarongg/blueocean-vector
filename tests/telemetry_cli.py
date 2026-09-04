@@ -125,12 +125,68 @@ def test_refresh_prices_never_opens_a_local_file() -> None:
     print("  OK")
 
 
+def test_failed_audit_exits_non_zero_but_still_prunes() -> None:
+    """The spec: the CLI "warns loudly, prints the audit row as JSON on stderr
+    so the record is not lost, and exits non-zero on the audit step while
+    leaving the destructive operation's own result untouched."
+
+    Both halves matter. Exiting 0 means a script that prunes nightly never
+    learns its audit trail has a hole in it; skipping the prune would make an
+    unreachable telemetry server able to block a destructive operation that
+    has nothing to do with it.
+    """
+    print("== a failed audit exits non-zero, and the prune still happens ==")
+    from qdrant_client import QdrantClient
+
+    from blueocean_mcp.admin import cmd_prune
+    from blueocean_mcp.config import DEFAULT_QDRANT_URL
+    from blueocean_mcp.embeddings import create_embedder
+    from blueocean_mcp.vector_store import VectorStore, collection_name
+
+    from ._helpers import reset_project
+
+    project = "audit-exit-test-project"
+    reset_project(project)
+    VectorStore(create_embedder()).store(
+        project, area="a", module="m", content="prune me", summary="s", importance=1
+    )
+
+    class _Args:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+    previous = os.environ.get("BLUEOCEAN_SERVER_URL")
+    os.environ["BLUEOCEAN_SERVER_URL"] = f"http://127.0.0.1:{DEAD_PORT}"
+    exited = None
+    try:
+        cmd_prune(_Args(project=project, older_days=None, max_importance=1,
+                        dry_run=False))
+    except SystemExit as e:
+        exited = e.code
+    finally:
+        if previous is None:
+            os.environ.pop("BLUEOCEAN_SERVER_URL", None)
+        else:
+            os.environ["BLUEOCEAN_SERVER_URL"] = previous
+
+    assert exited not in (None, 0), (
+        f"an unrecorded audit row must exit non-zero, got {exited!r}"
+    )
+    qdrant = QdrantClient(url=DEFAULT_QDRANT_URL)
+    remaining = qdrant.get_collection(collection_name(project)).points_count
+    assert remaining == 0, (
+        f"the prune itself must still have happened; {remaining} points left"
+    )
+    print("  OK")
+
+
 def main() -> None:
     test_usage_fails_loudly_when_the_server_is_down()
     test_usage_db_flag_reads_the_file_directly()
     test_usage_table_output_is_the_default()
     test_server_unavailable_is_raised_not_swallowed()
     test_refresh_prices_never_opens_a_local_file()
+    test_failed_audit_exits_non_zero_but_still_prunes()
     print("\nTELEMETRY CLI TEST PASSED")
 
 

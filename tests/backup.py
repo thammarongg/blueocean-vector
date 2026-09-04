@@ -70,7 +70,17 @@ def main() -> None:
         print("  correctly refused")
 
         print("== restore ==")
-        cmd_restore(_Args(project=PROJECT, snapshot_file=snapshot_path, yes=True))
+        # cmd_restore exits non-zero when its audit row cannot be recorded,
+        # which is the normal case here: this test does not run a telemetry
+        # server, and with auth on an untokened POST is refused. The restore
+        # itself is finished by then, and the orphan sweep below has already
+        # run, so the exit is the only thing to absorb. Anything else must
+        # still propagate.
+        try:
+            cmd_restore(_Args(project=PROJECT, snapshot_file=snapshot_path, yes=True))
+        except SystemExit as e:
+            assert e.code == 1, e.code
+            print("  (audit row unrecorded, as expected without a telemetry server)")
 
         print("== restore doesn't leave its own orphaned snapshot behind either ==")
         # recover_from_uploaded_snapshot() registers the uploaded file as a
