@@ -86,6 +86,19 @@ def test_write_file_is_atomic_and_readable() -> None:
     print("  OK")
 
 
+def test_malformed_pricing_file_yields_no_prices_instead_of_raising() -> None:
+    """A file that parses as JSON can still be the wrong shape. This used to
+    raise AttributeError out of load_file and, through the instrument
+    wrapper's price lookup, out of the memory operation itself."""
+    print("== a wrong-shaped pricing file yields {}, not an exception ==")
+    for body in ([1, 2, 3], {"prices": []}, {"prices": "nope"}, "just a string"):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "pricing.json"
+            path.write_text(json.dumps(body))
+            assert pricing.load_file(str(path)) == {}, body
+    print("  OK")
+
+
 def test_parse_openrouter_converts_per_token_to_per_million() -> None:
     """The feed quotes USD per token as a string. Our table is USD per 1M."""
     print("== OpenRouter per-token prices convert to per-1M ==")
@@ -126,6 +139,7 @@ def main() -> None:
     test_fastembed_is_free_not_priced_from_the_feed()
     test_cost_math()
     test_write_file_is_atomic_and_readable()
+    test_malformed_pricing_file_yields_no_prices_instead_of_raising()
     test_parse_openrouter_converts_per_token_to_per_million()
     test_free_models_are_flagged_not_just_zero()
     print("\nTELEMETRY PRICING TEST PASSED")

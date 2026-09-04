@@ -212,6 +212,33 @@ def test_telemetry_failure_does_not_break_the_tool() -> None:
     print("  OK")
 
 
+def test_broken_pricing_does_not_break_the_tool() -> None:
+    """The writer, the extractor and the hits update are all guarded, but the
+    price lookup sat outside every try. A malformed pricing file reaching
+    `resolve` therefore propagated straight out of the memory operation --
+    exactly what "a telemetry failure never breaks a memory operation" forbids.
+    """
+    print("== a broken price lookup does not break the memory operation ==")
+    from blueocean_mcp.telemetry import pricing, usage
+
+    def exploding_resolve(*_a, **_kw):
+        raise AttributeError("'list' object has no attribute 'items'")
+
+    original = pricing.resolve
+    pricing.resolve = exploding_resolve
+    try:
+        def memory_demo(project: str) -> dict:
+            """Demo."""
+            usage.add(100, 1.0, exact=True)  # forces _price to run
+            return {"ok": True}
+
+        wrapped = instrument(memory_demo, "memory_demo", writer_factory=lambda: None)
+        assert wrapped(project="p", ctx=None) == {"ok": True}
+    finally:
+        pricing.resolve = original
+    print("  OK")
+
+
 def test_client_info_is_recorded() -> None:
     """The whole point of the audit trail is knowing which agent called.
     Built from the library's real types on purpose: if the field is renamed
@@ -512,6 +539,7 @@ def main() -> None:
     test_error_message_redacts_caller_text()
     test_exception_raised_in_test_helper_is_redacted_by_origin()
     test_telemetry_failure_does_not_break_the_tool()
+    test_broken_pricing_does_not_break_the_tool()
     test_client_info_is_recorded()
     test_missing_client_info_is_not_fatal()
     test_memory_usage_is_on_the_denylist()

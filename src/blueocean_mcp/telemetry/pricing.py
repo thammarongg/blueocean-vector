@@ -45,7 +45,14 @@ def load_file(path: str | None = None) -> dict[str, float]:
         body = json.loads(target.read_text())
     except (OSError, ValueError):
         return {}
-    prices = body.get("prices", {})
+    # A file that parses as JSON can still be the wrong shape -- a list root,
+    # or "prices" holding anything but an object. Those used to raise
+    # AttributeError out of here and, through _price, out of the tool call.
+    if not isinstance(body, dict):
+        return {}
+    prices = body.get("prices")
+    if not isinstance(prices, dict):
+        return {}
     return {k: float(v) for k, v in prices.items() if isinstance(v, (int, float))}
 
 

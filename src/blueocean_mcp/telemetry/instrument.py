@@ -244,9 +244,17 @@ def _price(row: dict) -> None:
     tokens = row.get("embed_tokens")
     if not tokens:
         return
-    provider = DEFAULT_EMBEDDING_PROVIDER
-    model = resolve_embedding_model(provider)
-    price, source = pricing.resolve(provider, model)
+    # Guarded like _safe_record and _safe_hits. This ran unguarded, so a
+    # malformed pricing file propagated out of the memory operation itself.
+    # Leaving the row unpriced is the right failure: NULL means unknown, which
+    # is what we actually know here, and 0.0 would invent a free call.
+    try:
+        provider = DEFAULT_EMBEDDING_PROVIDER
+        model = resolve_embedding_model(provider)
+        price, source = pricing.resolve(provider, model)
+    except Exception:
+        logger.debug("telemetry price lookup failed", exc_info=True)
+        return
     row["unit_price_per_1m"] = price
     row["price_source"] = source
     row["est_cost_usd"] = pricing.cost_usd(tokens, price)
