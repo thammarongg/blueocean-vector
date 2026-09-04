@@ -211,6 +211,70 @@ def test_disabled_touches_no_file() -> None:
     print("  OK")
 
 
+def test_migration_v2_nulls_leaked_cli_reported_error_msg() -> None:
+    """PRIVACY REGRESSION for schema v2. Version 1 stored caller-supplied
+    error_msg on cli-reported audit rows verbatim, so rows already on disk
+    may carry memory or query text for the rest of the 90-day retention.
+
+    Break this test catches: a migration that (a) leaves the leaked
+    cli-reported error_msg in place, (b) also destroys server-observed error
+    messages, which are sanitized on the way in and safe to keep, (c) fails
+    to advance user_version so every connect re-runs the sweep, or (d) is not
+    idempotent on a second open.
+    """
+    print("== v1->v2 migration nulls only cli-reported error_msg ==")
+    with tempfile.TemporaryDirectory() as d:
+        path = str(Path(d) / "t.db")
+        # Build a version 1 database: v1 schema plus the leaked rows, then
+        # stamp it back to v1 the way an old deployment would be on disk.
+        conn = db.connect(path)
+        now = int(time.time())
+        conn.execute(
+            "INSERT INTO events (ts, kind, tool, ok, error_class, error_msg, origin)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (now, "admin", "prune", 0, "RuntimeError",
+             "leaked caller text 'SELECT secret'", "cli-reported"),
+        )
+        conn.execute(
+            "INSERT INTO events (ts, kind, tool, ok, error_class, error_msg, origin)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (now, "tool", "memory_search", 0, "ValueError",
+             "server-observed message, sanitized on the way in", "observed"),
+        )
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+        conn.close()
+
+        conn = db.connect(path)
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION, (
+            "migration must advance user_version so the data sweep runs once"
+        )
+        rows = {
+            r[0]: r[1] for r in conn.execute(
+                "SELECT origin, error_msg FROM events"
+            )
+        }
+        assert rows["cli-reported"] is None, (
+            f"v1 leaked caller text must be nulled, got {rows['cli-reported']!r}"
+        )
+        assert rows["observed"] == "server-observed message, sanitized on the way in", (
+            "server-observed error messages are safe and must survive the migration"
+        )
+        conn.close()
+
+        # Reconnecting an already-migrated database must be harmless.
+        conn = db.connect(path)
+        rows = {
+            r[0]: r[1] for r in conn.execute(
+                "SELECT origin, error_msg FROM events"
+            )
+        }
+        assert rows["observed"] == "server-observed message, sanitized on the way in"
+        assert rows["cli-reported"] is None
+        conn.close()
+    print("  OK")
+
+
 def main() -> None:
     test_connect_creates_schema()
     test_connect_is_idempotent()
@@ -221,6 +285,7 @@ def main() -> None:
     test_writer_self_disables_on_failure()
     test_entry_hits_upsert_and_delete()
     test_disabled_touches_no_file()
+    test_migration_v2_nulls_leaked_cli_reported_error_msg()
     print("\nTELEMETRY DB TEST PASSED")
 
 

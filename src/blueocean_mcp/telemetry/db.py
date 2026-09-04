@@ -1,8 +1,11 @@
 """SQLite schema and connection handling for telemetry.
 
-Migrations are additive only. A version mismatch never drops data: the 90
-days of history is the entire point of the feature, and a `docker compose
-pull` must not silently erase it.
+Schema migrations are additive only: a version mismatch never drops columns
+or rows, because the 90 days of history is the entire point of the feature
+and a `docker compose pull` must not silently erase it. The one exception is
+a data migration that removes values that should never have been stored
+(v2 nulls caller-supplied error_msg on cli-reported rows); that is a privacy
+fix, not schema churn.
 """
 
 import sqlite3
@@ -11,7 +14,25 @@ from pathlib import Path
 
 from ..config import DEFAULT_TELEMETRY_DB
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+# Version-gated data migrations, keyed by the version they upgrade FROM.
+# Everything that runs only on an upgrade (never on a fresh database, never
+# twice) lives here, separate from the additive column walk below.
+#
+# v1 -> v2: cli-reported audit rows stored the caller's error_msg verbatim
+# (routes.py now discards it), so rows already on disk may carry memory or
+# query text for the rest of the 90-day retention. The sweep nulls exactly
+# those values. Server-observed error messages are written by instrument.py
+# only after sanitization and are deliberately kept.
+_DATA_MIGRATIONS: dict[int, list[str]] = {
+    1: [
+        (
+            "UPDATE events SET error_msg = NULL"
+            " WHERE origin = 'cli-reported' AND error_msg IS NOT NULL"
+        ),
+    ],
+}
 
 # (column name, SQL type). Migrations walk this list and ALTER TABLE ADD any
 # column an older database is missing, so adding a dimension later is a
@@ -76,6 +97,7 @@ def connect(path: str | None = None) -> sqlite3.Connection:
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
+    from_version = conn.execute("PRAGMA user_version").fetchone()[0]
     conn.execute(
         "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, ts INTEGER NOT NULL)"
     )
@@ -99,6 +121,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     )
     for name, target in _INDEXES:
         conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {target}")
+    # 0 is a fresh database: the events table above was just created empty,
+    # so there is no old data to sweep.
+    for version in range(max(from_version, 1), SCHEMA_VERSION):
+        for statement in _DATA_MIGRATIONS.get(version, []):
+            conn.execute(statement)
     conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
 

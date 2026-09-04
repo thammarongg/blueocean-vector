@@ -77,8 +77,10 @@ Telemetry is **on by default** and **never leaves the machine**.
 SQLite, WAL mode, `PRAGMA busy_timeout`. Schema version tracked in
 `PRAGMA user_version`; migrations are **additive only** (`ALTER TABLE ADD
 COLUMN`). A version mismatch never drops data: 90 days of history is the only
-thing this feature is worth. If a breaking change is ever unavoidable, rename
-the old file aside rather than deleting it.
+thing this feature is worth. The one sanctioned exception is a data migration
+that removes values that should never have been stored (v2 nulls
+caller-supplied `error_msg` on `cli-reported` rows; see 8.1). If a breaking
+change is ever unavoidable, rename the old file aside rather than deleting it.
 
 ### 4.1 `events`
 
@@ -98,7 +100,7 @@ plus index with no joins.
 | `agent_session_label` | agent-declared session, nullable (see 4.3) |
 | `ok` | 0/1 |
 | `error_class` | exception class name |
-| `error_msg` | truncated to 200 chars |
+| `error_msg` | server-observed rows only, sanitized and truncated to 200 chars; always NULL on `cli-reported` rows (see 8.1) |
 | `total_ms` | whole tool call |
 | `embed_ms` | embedding portion only |
 | `result_count`, `top_score`, `tokens_returned` | search quality |
@@ -497,6 +499,15 @@ The server therefore stamps what it can verify - the timestamp, and
 `origin = 'observed'`. Rows the server generated from calls it actually handled
 carry `origin = 'observed'`.
 
+A posted `error_msg` is **discarded, not stored**. The sanitized messages in
+section 9 are safe because this server produced them from exceptions it
+observed itself; a posted `error_msg` is arbitrary caller text with no such
+provenance, and the privacy hard rule says caller text never reaches the
+database. The row is still accepted (202) with `error_class` intact: the
+classification survives, only the unverifiable text goes. The v2 migration
+nulls `error_msg` on existing `cli-reported` rows for the same reason; rows
+with `origin = 'observed'` are untouched by that sweep.
+
 Stated plainly in the docs and on the dashboard panel: **this audit trail is
 built to explain accidents, not to withstand a liar.** It answers "which agent
 pruned this project on 2026-08-17", which is the question that motivated it. It
@@ -513,7 +524,11 @@ is dumped and asserted not to contain them.
 `error_msg` is truncated to 200 chars and comes from exception messages, but
 it is **never the raw message**. Before recording, the wrapper drops the
 message entirely if it contains any string the caller passed in, replacing it
-with the fixed marker `<redacted: contained caller text>`.
+with the fixed marker `<redacted: contained caller text>`. This describes
+**server-observed rows only** (`origin = 'observed'`): the wrapper saw the
+exception, so it can sanitize it. Rows posted to `/api/audit` never carry an
+`error_msg` at all (8.1) - nobody on the server side saw that exception, so
+nothing can vouch for its text.
 
 The original argument for storing raw messages was that neither `raise` site in
 `vector_store.py` embeds memory content: an invalid project name (line 54) and
@@ -576,13 +591,16 @@ Written in this order; the first two are TDD gates before their code exists.
 10. **Day bucketing** - a UTC+7 offset puts an event at 23:30 local into the
     right local day.
 11. **Migration** - a v1 database opened by v2 code gains columns and keeps
-    its rows.
+    its rows; the v2 sweep nulls `error_msg` only where
+    `origin = 'cli-reported'`, observed messages survive, and reopening an
+    already-migrated database is harmless.
 12. **Price resolution** - env beats `pricing.json` beats the built-in table;
     an unknown model yields NULL cost with `price_source` NULL, not 0; the
     resolved price and source are snapshotted on the row.
 13. **Audit origin** - a row posted to `/api/audit` is stored with a
-    server-stamped timestamp and `origin = 'cli-reported'`, and cannot claim
-    `origin = 'observed'`.
+    server-stamped timestamp and `origin = 'cli-reported'`, cannot claim
+    `origin = 'observed'`, and has its posted `error_msg` discarded while
+    `error_class` survives.
 14. **`entry_hits` lifecycle** - `memory_delete` removes the matching row; an
     orphaned `point_id` left by an out-of-band deletion is skipped at read time
     rather than crashing the panel.
@@ -684,6 +702,15 @@ Amendments made while writing this spec:
   on stderr and exits non-zero on that step. Section 8.
 - **`--refresh-prices` posts to the server.** Same reason: only the server
   writes files in its own directory. Section 6.3.
+- **Posted `error_msg` discarded (closeout amendment).** The first
+  implementation copied a caller-supplied `error_msg` into `cli-reported`
+  rows, truncating but not redacting it - exactly the caller-text leak
+  section 9 exists to prevent, since a CLI-caught exception can quote memory
+  or query text and nobody server-side saw it to sanitize it. Rows posted to
+  `/api/audit` now never store `error_msg` (still 202, `error_class`
+  survives), and the v2 migration nulls the field on existing
+  `cli-reported` rows. Server-observed messages keep their section 9
+  sanitization path unchanged. Sections 8.1 and 9.
 
 ## 13. Open risks
 

@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- **Privacy, hard rule.** Telemetry never stores query text, memory content, summaries, entry metadata, or bearer tokens. `error_msg` is truncated to 200 characters.
+- **Privacy, hard rule.** Telemetry never stores query text, memory content, summaries, entry metadata, or bearer tokens. `error_msg` exists only on server-observed rows: sanitized per the spec (section 9) and truncated to 200 characters. Rows accepted from `POST /api/audit` store NULL `error_msg` no matter what was posted - caller text has no provenance the server can vouch for - while `error_class` survives; the v2 migration nulls the same field on pre-existing `cli-reported` rows.
 - **Failure isolation.** A telemetry failure never breaks a memory operation: log once, self-disable, continue.
 - **`BLUEOCEAN_TELEMETRY=0` disables everything.** With it set, no database file is opened and `/dashboard`, `/api/stats`, `/api/audit`, `/api/prices` return 503.
 - **The process that owns the directory is the only one that writes it.** The server writes the database and the pricing file. The CLI reads over HTTP and never falls back to the file silently; `--db` is an explicit opt-in.

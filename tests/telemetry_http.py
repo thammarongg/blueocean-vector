@@ -5,6 +5,7 @@ Run with:
 """
 
 import json
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -275,6 +276,76 @@ def test_audit_row_cannot_claim_to_be_observed() -> None:
     print("  OK")
 
 
+def test_audit_post_error_msg_is_discarded() -> None:
+    """PRIVACY REGRESSION. The route used to copy payload['error_msg'] into
+    the row verbatim. A CLI that caught an exception whose message embeds
+    memory content or query text would persist that text for 90 days, which
+    the hard rule in spec section 9 forbids: caller text never reaches the
+    database. Break this test catches: a 202 response whose cli-reported row
+    still carries the posted error_msg.
+
+    Server-observed error messages are different: instrument.py sanitizes
+    them (dropping anything containing caller text) before writing, so they
+    stay. Only the cli-reported copy is untrusted and must be dropped.
+    """
+    print("== posted error_msg is discarded, error_class and 202 survive ==")
+    with tempfile.TemporaryDirectory() as d:
+        db_file = str(Path(d) / "t.db")
+        proc = _start_server({
+            "BLUEOCEAN_AUTH_TOKEN": "secret-token",
+            "BLUEOCEAN_TELEMETRY_DB": db_file,
+        })
+        try:
+            sentinel = f"SENTINEL-audit-leak-{time.time_ns()}"
+            payload = json.dumps({
+                "tool": "prune-failed", "project": "p", "ok": 0,
+                "error_class": "RuntimeError", "error_msg": sentinel,
+            }).encode()
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{PORT}/api/audit", data=payload,
+                headers={"Authorization": "Bearer secret-token",
+                         "Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                assert resp.status == 202, (
+                    f"the request itself is fine and must stay accepted, got {resp.status}"
+                )
+
+            # The writer drains asynchronously; wait for the row to land
+            # before judging it, so a slow drain cannot pass vacuously.
+            # Plain sqlite3, no PRAGMAs and no migrate: the server holds the
+            # file, and db.connect()'s journal-mode/user_version writes
+            # collide with its lock.
+            deadline = time.time() + 10
+            row = None
+            while time.time() < deadline:
+                try:
+                    reader = sqlite3.connect(db_file)
+                    try:
+                        row = reader.execute(
+                            "SELECT error_msg, error_class FROM events"
+                            " WHERE tool = 'prune-failed' AND origin = 'cli-reported'"
+                        ).fetchone()
+                    finally:
+                        reader.close()
+                    if row is not None:
+                        break
+                except sqlite3.OperationalError:
+                    pass
+                time.sleep(0.2)
+            assert row is not None, "audit row never landed in the database"
+            assert row[0] is None, (
+                f"cli-reported error_msg must not be persisted, got {row[0]!r}"
+            )
+            assert row[1] == "RuntimeError", (
+                f"error_class is server-checkable metadata and must survive, got {row[1]!r}"
+            )
+        finally:
+            proc.terminate()
+            proc.wait(timeout=5)
+    print("  OK")
+
+
 def main() -> None:
     test_build_stats_shapes_every_panel()
     test_day_bucketing_uses_the_callers_offset()
@@ -284,6 +355,7 @@ def main() -> None:
     test_stats_requires_a_token()
     test_disabled_returns_503_not_404()
     test_audit_row_cannot_claim_to_be_observed()
+    test_audit_post_error_msg_is_discarded()
     print("\nTELEMETRY HTTP TEST PASSED")
 
 
