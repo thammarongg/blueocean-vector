@@ -3099,6 +3099,7 @@ something to paper over by opening the file anyway.
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 
 from ..config import DEFAULT_SERVER_URL
@@ -3144,7 +3145,7 @@ def fetch_stats(
 ) -> dict:
     query = f"?days={days}&tz_offset_minutes={tz_offset_minutes}"
     if project:
-        query += f"&project={urllib.request.quote(project)}"
+        query += f"&project={urllib.parse.quote(project)}"
     return _request(f"/api/stats{query}", server_url, token)
 
 
@@ -3186,10 +3187,6 @@ def _print_table(title: str, rows: list[dict], columns: list[str]) -> None:
 
 def cmd_usage(args: argparse.Namespace) -> None:
     from .telemetry import client
-
-    if args.refresh_prices:
-        cmd_refresh_prices(args)
-        return
 
     tz_offset = _local_tz_offset_minutes()
     if args.db:
@@ -3263,20 +3260,31 @@ Add `import sys` to the imports at the top of `admin.py` if it is not already th
     p_usage.add_argument("--db", default=None,
                          help="Read this telemetry file directly instead of asking the "
                               "server. Development only: the server must not be running.")
-    p_usage.add_argument("--refresh-prices", action="store_true",
-                         help="Fetch embedding prices from OpenRouter and hand them to the server")
     p_usage.set_defaults(func=cmd_usage)
+```
+
+`--refresh-prices` and the `cmd_refresh_prices` dispatch at the top of `cmd_usage` are
+deliberately NOT here: `cmd_refresh_prices` does not exist until Task 11, and wiring the
+flag now would leave this commit with a `NameError` path. Task 11 adds both.
+
+```python
 ```
 
 - [ ] **Step 5: Report CLI destructive operations to the audit trail**
 
-At the end of `cmd_prune` and `cmd_restore` in `admin.py`, after the operation succeeds:
+At the end of `cmd_prune` and `cmd_restore` in `admin.py`, after the operation succeeds.
+`cmd_prune` has no `deleted` variable and a dry run removes nothing, so guard it:
 
 ```python
-    _report_audit({"tool": "prune", "project": args.project, "deleted_count": deleted})
+    if not args.dry_run:
+        _report_audit(
+            {"tool": "prune", "project": args.project, "deleted_count": len(to_delete)}
+        )
 ```
 
-(use `"restore"` and the restored count in `cmd_restore`), with this helper:
+In `cmd_restore`, report `"restore"` with `info.points_count` right after the success
+print, so the row still goes out if the leftover-snapshot cleanup below it throws. With
+this helper:
 
 ```python
 def _report_audit(row: dict) -> None:
@@ -3431,7 +3439,19 @@ def fetch_openrouter(timeout: float = 10.0) -> dict[str, float]:
 
 - [ ] **Step 4: Add the CLI command**
 
-In `src/blueocean_mcp/admin.py`:
+In `src/blueocean_mcp/admin.py`, add the handler, then wire it into `cmd_usage` and the
+`usage` subparser (both deferred from Task 10):
+
+```python
+    # at the top of cmd_usage, before tz_offset
+    if args.refresh_prices:
+        cmd_refresh_prices(args)
+        return
+
+    # in main(), on p_usage
+    p_usage.add_argument("--refresh-prices", action="store_true",
+                         help="Fetch embedding prices from OpenRouter and hand them to the server")
+```
 
 ```python
 def cmd_refresh_prices(args: argparse.Namespace) -> None:

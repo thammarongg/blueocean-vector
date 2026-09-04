@@ -19,6 +19,7 @@ Commands:
 import argparse
 import json
 import os
+import sys
 import time
 
 import httpx
@@ -40,6 +41,20 @@ def _client() -> QdrantClient:
         url=_qdrant_url(),
         api_key=os.getenv("BLUEOCEAN_QDRANT_API_KEY"),
     )
+
+
+def _report_audit(row: dict) -> None:
+    """Send an audit row to the server. If the server is not reachable we do
+    NOT write the file: that would be a silent fallback to the host's default
+    path while the real database lives at the container's, producing a record
+    nobody ever reads. Print it instead so the operator still has it."""
+    from .telemetry import client
+
+    try:
+        client.post_audit(row, token=os.getenv("BLUEOCEAN_AUTH_TOKEN") or None)
+    except client.ServerUnavailable as e:
+        print(f"warning: audit row not recorded ({e})", file=sys.stderr)
+        print(json.dumps({"unrecorded_audit": row}), file=sys.stderr)
 
 
 def cmd_stats(args: argparse.Namespace) -> None:
@@ -125,6 +140,10 @@ def cmd_prune(args: argparse.Namespace) -> None:
             collection_name=name,
             points_selector=to_delete,
         )
+    if not args.dry_run:
+        _report_audit(
+            {"tool": "prune", "project": args.project, "deleted_count": len(to_delete)}
+        )
 
 
 def cmd_snapshot(args: argparse.Namespace) -> None:
@@ -194,6 +213,9 @@ def cmd_restore(args: argparse.Namespace) -> None:
         )
     info = client.get_collection(name)
     print(f"Restored project {args.project!r}: {info.points_count} points.")
+    _report_audit(
+        {"tool": "restore", "project": args.project, "deleted_count": info.points_count}
+    )
 
     # recover_from_uploaded_snapshot() registers the uploaded file as a
     # server-side snapshot too, as a side effect of restoring it -- left
@@ -239,6 +261,81 @@ def cmd_generate_token(args: argparse.Namespace) -> None:
     print(f"Token: {token}")
 
 
+def _local_tz_offset_minutes() -> int:
+    return -(time.altzone if time.daylight and time.localtime().tm_isdst else time.timezone) // 60
+
+
+def _print_table(title: str, rows: list[dict], columns: list[str]) -> None:
+    print(f"\n{title}")
+    if not rows:
+        print("  (none)")
+        return
+    widths = [max(len(c), *(len(str(r.get(c, ""))) for r in rows)) for c in columns]
+    print("  " + "  ".join(c.ljust(w) for c, w in zip(columns, widths)))
+    for row in rows:
+        print("  " + "  ".join(str(row.get(c, "")).ljust(w) for c, w in zip(columns, widths)))
+
+
+def cmd_usage(args: argparse.Namespace) -> None:
+    from .telemetry import client
+
+    tz_offset = _local_tz_offset_minutes()
+    if args.db:
+        # Explicit opt-in: the caller is telling us there is no server, which
+        # is true for stdio-only development. Never reached by accident.
+        from .telemetry import db as telemetry_db
+        from .telemetry.queries import build_stats
+
+        conn = telemetry_db.connect(args.db)
+        try:
+            stats = build_stats(conn, days=args.days, tz_offset_minutes=tz_offset,
+                                project=args.project)
+        finally:
+            conn.close()
+    else:
+        try:
+            stats = client.fetch_stats(
+                days=args.days,
+                tz_offset_minutes=tz_offset,
+                project=args.project,
+                token=os.getenv("BLUEOCEAN_AUTH_TOKEN") or None,
+            )
+        except client.ServerUnavailable as e:
+            print(
+                f"{e}\nStart the server, or pass --db <path> to read a local "
+                "telemetry file directly (development only).",
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from e
+
+    if args.json:
+        print(json.dumps(stats, indent=2, ensure_ascii=False))
+        return
+
+    if args.audit:
+        _print_table("Audit", stats["audit"], ["ts", "tool", "project", "deleted_count", "origin"])
+        return
+    if args.unused:
+        _print_table(
+            "Never retrieved (since first observed)",
+            stats["unused"], ["project", "point_id", "hits", "full_hits", "last_seen_at"],
+        )
+        return
+
+    tiles = stats["tiles"]
+    print(f"Window: last {stats['window']['days']} day(s)")
+    print(
+        f"  calls={tiles['calls']}  errors={tiles['errors']}  "
+        f"p95={tiles['p95_ms']}ms  cost=${tiles['est_cost_usd']:.6f}  "
+        f"unpriced={stats['unpriced_calls']}"
+    )
+    key = {"tool": "tool", "agent": "agent_name", "project": "project", "day": "day"}[args.by]
+    source = {"tool": stats["tools"], "agent": stats["agents"],
+              "project": stats["projects"], "day": stats["daily"]}[args.by]
+    columns = [key, "calls"] + (["p50_ms", "p95_ms", "errors"] if args.by == "tool" else [])
+    _print_table(f"By {args.by}", source, columns)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="blueocean-admin")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -279,6 +376,20 @@ def main() -> None:
         "--yes", action="store_true", help="Confirm overwriting the project's current data"
     )
     p_restore.set_defaults(func=cmd_restore)
+
+    p_usage = sub.add_parser("usage")
+    p_usage.add_argument("--project", default=None,
+                         help="Scope to one project (default: every project)")
+    p_usage.add_argument("--days", type=int, default=7)
+    p_usage.add_argument("--by", choices=["tool", "agent", "project", "day"], default="tool")
+    p_usage.add_argument("--audit", action="store_true", help="Show the audit trail instead")
+    p_usage.add_argument("--unused", action="store_true",
+                         help="Show entries never retrieved, since first observed")
+    p_usage.add_argument("--json", action="store_true")
+    p_usage.add_argument("--db", default=None,
+                         help="Read this telemetry file directly instead of asking the "
+                              "server. Development only: the server must not be running.")
+    p_usage.set_defaults(func=cmd_usage)
 
     p_token = sub.add_parser("generate-token")
     p_token.add_argument(
