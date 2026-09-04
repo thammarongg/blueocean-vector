@@ -276,8 +276,53 @@ def _print_table(title: str, rows: list[dict], columns: list[str]) -> None:
         print("  " + "  ".join(str(row.get(c, "")).ljust(w) for c, w in zip(columns, widths)))
 
 
+def cmd_refresh_prices(args: argparse.Namespace) -> None:
+    """Fetch embedding prices from OpenRouter and hand them to the server.
+
+    This is the only command that sends anything off this machine. The server
+    deliberately never calls out on its own: an automatic refresh would make
+    an outbound request nobody asked for and add a hidden network dependency
+    to a dashboard meant to work air-gapped.
+    """
+    from .telemetry import client, pricing
+
+    if os.getenv("BLUEOCEAN_OFFLINE_TEST") == "1":
+        prices = {"openai/text-embedding-3-small": 0.02}
+    else:
+        prices = pricing.fetch_openrouter()
+    if not prices:
+        print("OpenRouter returned no usable prices", file=sys.stderr)
+        raise SystemExit(1)
+
+    if args.db:
+        pricing.write_file(None, prices)
+        print(f"Wrote {len(prices)} model prices to the local pricing file")
+        return
+
+    try:
+        client.post_prices(prices, token=os.getenv("BLUEOCEAN_AUTH_TOKEN") or None)
+    except client.ServerUnavailable as e:
+        print(
+            f"{e}\nPrices were fetched but not stored. Start the server, or pass "
+            "--db to write the local pricing file directly (development only).",
+            file=sys.stderr,
+        )
+        raise SystemExit(1) from e
+    flagged = [m for m in prices if pricing.retains_data(m)]
+    print(f"Sent {len(prices)} model prices to the server")
+    if flagged:
+        print(
+            f"note: {len(flagged)} of these are OpenRouter ':free' models, which may "
+            "retain requests and embeddings for training"
+        )
+
+
 def cmd_usage(args: argparse.Namespace) -> None:
     from .telemetry import client
+
+    if args.refresh_prices:
+        cmd_refresh_prices(args)
+        return
 
     tz_offset = _local_tz_offset_minutes()
     if args.db:
@@ -389,6 +434,8 @@ def main() -> None:
     p_usage.add_argument("--db", default=None,
                          help="Read this telemetry file directly instead of asking the "
                               "server. Development only: the server must not be running.")
+    p_usage.add_argument("--refresh-prices", action="store_true",
+                         help="Fetch embedding prices from OpenRouter and hand them to the server")
     p_usage.set_defaults(func=cmd_usage)
 
     p_token = sub.add_parser("generate-token")

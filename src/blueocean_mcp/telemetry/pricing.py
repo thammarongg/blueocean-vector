@@ -91,3 +91,44 @@ def cost_usd(tokens: int | None, price_per_1m: float | None) -> float | None:
     if tokens is None or price_per_1m is None:
         return None
     return tokens / 1_000_000 * price_per_1m
+
+
+# The embeddings feed is a different endpoint from /api/v1/models, which
+# returns chat models only and contains no embedding models at all. No API key
+# is required. Verified 2026-09-02: 33 models, pricing.prompt in USD per token.
+OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/embeddings/models"
+
+
+def retains_data(model_id: str) -> bool:
+    """OpenRouter's `:free` tier states that requests and embeddings may be
+    retained and used for training. Callers must label these rather than show
+    an attractive $0."""
+    return model_id.endswith(":free")
+
+
+def parse_openrouter(payload: dict) -> dict[str, float]:
+    """Convert the feed's USD-per-token strings into USD per 1M tokens.
+
+    A model with no usable price is skipped, not recorded as free: unknown and
+    zero mean different things everywhere else in this file.
+    """
+    out: dict[str, float] = {}
+    for model in payload.get("data", []):
+        model_id = model.get("id")
+        raw = (model.get("pricing") or {}).get("prompt")
+        if not model_id or raw is None:
+            continue
+        try:
+            out[model_id] = float(raw) * 1_000_000
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def fetch_openrouter(timeout: float = 10.0) -> dict[str, float]:
+    import json as _json
+    import urllib.request
+
+    with urllib.request.urlopen(OPENROUTER_MODELS_URL, timeout=timeout) as resp:
+        payload = _json.loads(resp.read().decode())
+    return parse_openrouter(payload)

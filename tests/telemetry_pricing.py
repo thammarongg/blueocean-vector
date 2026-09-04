@@ -86,6 +86,39 @@ def test_write_file_is_atomic_and_readable() -> None:
     print("  OK")
 
 
+def test_parse_openrouter_converts_per_token_to_per_million() -> None:
+    """The feed quotes USD per token as a string. Our table is USD per 1M."""
+    print("== OpenRouter per-token prices convert to per-1M ==")
+    payload = {"data": [
+        {"id": "openai/text-embedding-3-small", "pricing": {"prompt": "0.00000002"}},
+        {"id": "openai/text-embedding-3-large", "pricing": {"prompt": "0.00000013"}},
+        {"id": "openai/text-embedding-ada-002", "pricing": {"prompt": "0.0000001"}},
+        {"id": "liquid/lfm-2.5-embedding-350m:free", "pricing": {"prompt": "0"}},
+        {"id": "broken/model", "pricing": {}},
+    ]}
+    prices = pricing.parse_openrouter(payload)
+    assert abs(prices["openai/text-embedding-3-small"] - 0.02) < 1e-9, prices
+    assert abs(prices["openai/text-embedding-3-large"] - 0.13) < 1e-9, prices
+    assert abs(prices["openai/text-embedding-ada-002"] - 0.10) < 1e-9, prices
+    assert "broken/model" not in prices, "a model with no price is skipped, not zeroed"
+    print("  OK")
+
+
+def test_free_models_are_flagged_not_just_zero() -> None:
+    """`:free` OpenRouter models state that requests and embeddings may be
+    retained for training. A displayed "$0" without that context is a trap for
+    a project whose whole premise is that memory content stays local."""
+    print("== :free models are marked as data-retaining ==")
+    payload = {"data": [
+        {"id": "liquid/lfm-2.5-embedding-350m:free", "pricing": {"prompt": "0"}},
+    ]}
+    prices = pricing.parse_openrouter(payload)
+    assert pricing.retains_data("liquid/lfm-2.5-embedding-350m:free") is True
+    assert pricing.retains_data("openai/text-embedding-3-small") is False
+    assert prices["liquid/lfm-2.5-embedding-350m:free"] == 0.0
+    print("  OK")
+
+
 def main() -> None:
     test_builtin_prices_match_the_spec()
     test_resolution_order()
@@ -93,6 +126,8 @@ def main() -> None:
     test_fastembed_is_free_not_priced_from_the_feed()
     test_cost_math()
     test_write_file_is_atomic_and_readable()
+    test_parse_openrouter_converts_per_token_to_per_million()
+    test_free_models_are_flagged_not_just_zero()
     print("\nTELEMETRY PRICING TEST PASSED")
 
 

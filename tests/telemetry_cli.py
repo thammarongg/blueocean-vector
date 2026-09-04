@@ -102,11 +102,35 @@ def test_server_unavailable_is_raised_not_swallowed() -> None:
     print("  OK")
 
 
+def test_refresh_prices_never_opens_a_local_file() -> None:
+    print("== --refresh-prices posts to the server, opens no file ==")
+    with tempfile.TemporaryDirectory() as d:
+        pricing_file = Path(d) / "pricing.json"
+        result = _run(
+            ["usage", "--refresh-prices"],
+            {
+                "BLUEOCEAN_SERVER_URL": f"http://127.0.0.1:{DEAD_PORT}",
+                "BLUEOCEAN_PRICING_FILE": str(pricing_file),
+                "BLUEOCEAN_OFFLINE_TEST": "1",
+            },
+        )
+        assert result.returncode != 0, result.stdout
+        # Without this the test passes while --refresh-prices does not exist at
+        # all: argparse rejects the unknown flag, exits non-zero, and writes no
+        # file. Pin the failure to the one we mean.
+        assert "could not reach" in result.stderr.lower(), result.stderr
+        assert not pricing_file.exists(), (
+            "without --db the CLI must hand prices to the server, never write them"
+        )
+    print("  OK")
+
+
 def main() -> None:
     test_usage_fails_loudly_when_the_server_is_down()
     test_usage_db_flag_reads_the_file_directly()
     test_usage_table_output_is_the_default()
     test_server_unavailable_is_raised_not_swallowed()
+    test_refresh_prices_never_opens_a_local_file()
     print("\nTELEMETRY CLI TEST PASSED")
 
 
