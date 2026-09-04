@@ -135,6 +135,13 @@ def build_stats(
             "SELECT project, point_id, hits, full_hits, last_seen_at FROM entry_hits"
             " ORDER BY hits ASC, last_seen_at ASC LIMIT 50",
         ),
+        # A real COUNT, not len(unused): that list is LIMIT 50 and ordered by
+        # hits ASC, so its length counted retrieved entries too and saturated
+        # at 50. Unscoped by project to match the list above it, so the number
+        # and the rows never disagree.
+        "never_retrieved": conn.execute(
+            "SELECT COUNT(*) FROM entry_hits WHERE hits = 0"
+        ).fetchone()[0],
         "audit": _rows(
             conn,
             f"SELECT ts, tool, project, deleted_count, agent_name, origin FROM events"
@@ -209,6 +216,6 @@ def build_usage_summary(
         "top_agents": [
             {"agent": a["agent_name"], "calls": a["calls"]} for a in stats["agents"][:3]
         ],
-        "unused_entries": len(stats["unused"]),
+        "unused_entries": stats["never_retrieved"],
         "hint": "call again with view='unused' | 'tools' | 'errors' for detail",
     }

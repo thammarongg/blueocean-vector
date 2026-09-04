@@ -284,6 +284,66 @@ def test_price_follows_the_running_provider_not_the_import_time_default() -> Non
     print("  OK")
 
 
+def test_stored_entries_are_seeded_so_never_retrieved_is_knowable() -> None:
+    """entry_hits rows were only created when an entry was HIT, so hits = 0 was
+    unreachable and the "never retrieved" panel could only ever show
+    least-retrieved-among-those-retrieved -- the opposite of what it is for.
+    memory_store now seeds a row at 0, and a later search bumps it to 1.
+    """
+    print("== a stored entry starts at hits = 0 and a search bumps it ==")
+    with tempfile.TemporaryDirectory() as d:
+        w = _writer_in(d)
+        try:
+            def memory_store(project: str, area: str, module: str, content: str,
+                             summary: str, importance: int = 3) -> str:
+                """Demo."""
+                return "point-abc"
+
+            def memory_search(project: str, query: str) -> dict:
+                """Demo."""
+                return {
+                    "summary": [{"id": "point-abc", "score": 0.9}],
+                    "full": [],
+                    "total_tokens": 10,
+                }
+
+            store = instrument(memory_store, "memory_store", writer_factory=lambda: w)
+            store(project="p", area="a", module="m", content="c", summary="s", ctx=None)
+            w.flush()
+
+            from blueocean_mcp.telemetry import db
+            conn = db.connect(str(Path(d) / "t.db"))
+            row = conn.execute(
+                "SELECT hits, full_hits, last_seen_at FROM entry_hits"
+                " WHERE point_id = 'point-abc'"
+            ).fetchone()
+            assert row is not None, "storing an entry must create its entry_hits row"
+            assert row[0] == 0, f"a freshly stored entry has never been retrieved: {row}"
+            assert row[1] == 0, row
+            assert row[2] is None, f"never seen means no last_seen_at: {row}"
+
+            search = instrument(memory_search, "memory_search", writer_factory=lambda: w)
+            search(project="p", query="q", ctx=None)
+            w.flush()
+            hits, full_hits = conn.execute(
+                "SELECT hits, full_hits FROM entry_hits WHERE point_id = 'point-abc'"
+            ).fetchone()
+            assert hits == 1, f"the seeded row must count up, not be replaced: {hits}"
+            assert full_hits == 0, full_hits
+
+            # Storing the same id again must not reset a real hit count.
+            store(project="p", area="a", module="m", content="c", summary="s", ctx=None)
+            w.flush()
+            hits = conn.execute(
+                "SELECT hits FROM entry_hits WHERE point_id = 'point-abc'"
+            ).fetchone()[0]
+            assert hits == 1, f"re-seeding must not clobber a real count: {hits}"
+            conn.close()
+        finally:
+            w.stop()
+    print("  OK")
+
+
 def test_bedrock_in_an_unpriced_region_costs_null_not_us_east_1() -> None:
     """The price table had no region, so a Bedrock deployment in eu-west-1 was
     billed at us-east-1's rate. Unknown must stay NULL: it shows up in
@@ -677,6 +737,7 @@ def main() -> None:
     test_telemetry_failure_does_not_break_the_tool()
     test_broken_pricing_does_not_break_the_tool()
     test_price_follows_the_running_provider_not_the_import_time_default()
+    test_stored_entries_are_seeded_so_never_retrieved_is_knowable()
     test_bedrock_in_an_unpriced_region_costs_null_not_us_east_1()
     test_stdio_falls_back_to_a_per_process_session_id()
     test_client_info_is_recorded()

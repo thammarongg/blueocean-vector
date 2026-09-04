@@ -71,6 +71,13 @@ class TelemetryWriter:
             return
         self._put(("delete_hits", (project, list(point_ids))))
 
+    def seed_hits(self, project: str, point_ids: list[str]) -> None:
+        """Create entry_hits rows at zero for entries that have just been
+        stored and so have never been retrieved."""
+        if not point_ids:
+            return
+        self._put(("seed_hits", (project, list(point_ids))))
+
     # -- consumer side ----------------------------------------------------
 
     def start(self) -> None:
@@ -173,6 +180,18 @@ class TelemetryWriter:
             project, point_ids = payload
             conn.executemany(
                 "DELETE FROM entry_hits WHERE project = ? AND point_id = ?",
+                [(project, pid) for pid in point_ids],
+            )
+        elif kind == "seed_hits":
+            project, point_ids = payload
+            # OR IGNORE, never OR REPLACE: re-storing an id must not reset a
+            # real hit count to zero. last_seen_at stays NULL because the entry
+            # genuinely has not been seen, and SQLite sorts NULL first, so
+            # these lead the "never retrieved" panel without a query change.
+            conn.executemany(
+                "INSERT OR IGNORE INTO entry_hits"
+                " (project, point_id, hits, full_hits, last_seen_at)"
+                " VALUES (?, ?, 0, 0, NULL)",
                 [(project, pid) for pid in point_ids],
             )
         conn.commit()

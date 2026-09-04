@@ -124,6 +124,34 @@ def test_usage_summary_is_small() -> None:
     print("  OK")
 
 
+def test_never_retrieved_is_counted_not_inferred_from_the_capped_list() -> None:
+    """`unused_entries` was len() of a list that is LIMIT 50 and ordered by
+    hits ASC -- so it counted retrieved entries too, and saturated at 50 no
+    matter how many there really were. The spec asks for a "count of entries
+    never retrieved", which is a COUNT of hits = 0.
+    """
+    print("== never-retrieved is a real count, not the length of a capped list ==")
+    with tempfile.TemporaryDirectory() as d:
+        conn = db.connect(str(Path(d) / "t.db"))
+        conn.executemany(
+            "INSERT INTO entry_hits (project, point_id, hits, full_hits, last_seen_at)"
+            " VALUES (?, ?, ?, ?, ?)",
+            [("p", f"never-{i}", 0, 0, None) for i in range(60)]
+            + [("p", f"used-{i}", 3, 1, 1788000000) for i in range(20)],
+        )
+        conn.commit()
+
+        stats = queries.build_stats(conn, days=7)
+        assert stats["never_retrieved"] == 60, (
+            f"60 entries have never been retrieved, got {stats['never_retrieved']}; "
+            f"the list itself is capped at {len(stats['unused'])}"
+        )
+        summary = queries.build_usage_summary(conn, days=7)
+        assert summary["unused_entries"] == 60, summary["unused_entries"]
+        conn.close()
+    print("  OK")
+
+
 def test_usage_summary_view_drilldown() -> None:
     print("== the view parameter drills into one list ==")
     with tempfile.TemporaryDirectory() as d:
@@ -251,6 +279,7 @@ def main() -> None:
     test_build_stats_shapes_every_panel()
     test_day_bucketing_uses_the_callers_offset()
     test_usage_summary_is_small()
+    test_never_retrieved_is_counted_not_inferred_from_the_capped_list()
     test_usage_summary_view_drilldown()
     test_stats_requires_a_token()
     test_disabled_returns_503_not_404()

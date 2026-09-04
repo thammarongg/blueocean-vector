@@ -179,7 +179,21 @@ def _extract_summarize(kwargs: dict, _result: Any) -> tuple[dict, tuple | None]:
     return ({"agent_session_label": label} if label else {}), None
 
 
+def _extract_store(kwargs: dict, result: Any) -> tuple[dict, tuple | None]:
+    """Seed an entry_hits row at zero so "never retrieved" is answerable.
+
+    Rows used to appear only when an entry was HIT, which made hits = 0
+    unreachable: the panel could only ever rank the entries that HAD been
+    retrieved. memory_store returns the point id as a bare string.
+    """
+    project = kwargs.get("project")
+    if not project or not isinstance(result, str) or not result:
+        return {}, None
+    return {}, ("seed", project, [result])
+
+
 _EXTRACTORS = {
+    "memory_store": _extract_store,
     "memory_search": _extract_search,
     "memory_get": _extract_get,
     "memory_delete": _extract_delete,
@@ -292,9 +306,17 @@ def _safe_hits(writer_factory: Callable[[], Any], instruction: tuple) -> None:
         w = writer_factory()
         if w is None:
             return
-        if instruction[0] == "hits":
+        # Every kind is named. An unrecognised one used to fall into the
+        # delete branch, so adding an instruction would silently DELETE the
+        # rows it was written to create.
+        kind = instruction[0]
+        if kind == "hits":
             w.record_hits(instruction[1], instruction[2], instruction[3])
-        else:
+        elif kind == "delete_hits":
             w.delete_hits(instruction[1], instruction[2])
+        elif kind == "seed":
+            w.seed_hits(instruction[1], instruction[2])
+        else:
+            logger.debug("unknown telemetry hit instruction %r", kind)
     except Exception:
         logger.debug("telemetry hits update failed", exc_info=True)
