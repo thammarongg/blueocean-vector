@@ -317,6 +317,14 @@ livenessProbe:
   httpGet: { path: /health, port: 8765 }
 ```
 
+**Linux bind-mount ownership.** The container runs as uid 10001 (`appuser` in the `Dockerfile`) and writes its telemetry database and pricing file into the `./data` bind mount. On macOS, Docker Desktop maps bind-mount ownership to the host user, so this is invisible. On Linux the container's uid is the file's uid, and a `./data` directory created by your normal user (typically uid 1000) is not writable by 10001 — the server starts but telemetry stays empty. After the first `docker compose up`, hand the directory over once:
+
+```bash
+mkdir -p data && sudo chown -R 10001:10001 data
+```
+
+(`chgrp` + `chmod g+rwx` works too if you would rather keep the directory owned by yourself; the server only needs to create and write files inside it. Hosts that need to inspect `data/telemetry.db` should do it read-only — see the note in "Usage telemetry" about SQLite locking across bind mounts.)
+
 ---
 
 ## A few gotchas worth knowing before you touch this

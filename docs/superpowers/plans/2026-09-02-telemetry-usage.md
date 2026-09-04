@@ -1,5 +1,7 @@
 # Telemetry and Usage Implementation Plan
 
+> **Status: COMPLETE (2026-09-04).** All 13 tasks and all six substantive review fixes are implemented and committed; the fresh 17-script suite passes and persistence across a container restart on the bind mount has been verified. The per-task checkboxes below are intentionally left as written: they are the recipe the work was executed against, not a tracker to re-toggle after the fact. Closeout follow-ups (audit `error_msg` privacy, two lint findings, dashboard panel order, this status note) are the final commits on top, starting at `d311340`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Make memory usage observable by recording every MCP tool call to a local SQLite event log and exposing it through an MCP tool, an admin CLI, and a single-file dashboard.
@@ -3866,7 +3868,7 @@ git commit -m "Persist telemetry across container rebuilds and document it"
 
 **Gap found and closed during review.** `agent_session_label` (§4.3) was created in Task 1 and populated nowhere. Task 6 now carries an extractor that fills it from `memory_summarize_session`'s `session_id` argument, plus the test that proves it.
 
-**Known remaining limit.** The per-process UUID that stands in for `session_id` on stdio (§4.3) is not implemented: on stdio `ctx.headers` is `None`, so `session_id` stays NULL there. Grouping by session works over streamable-http, which is how every registered agent connects; stdio is the development path. Add the fallback UUID in Task 3's `_agent_identity` if stdio grouping is ever wanted.
+**Formerly open, now resolved: stdio sessions.** This review flagged that on stdio `ctx.headers` is `None`, so `session_id` stayed NULL and per-session grouping worked only over streamable-http. Resolved in commit `e8ba45c` ("Give stdio calls a per-process session id"): `_agent_identity` now falls back to a per-process UUID when there are no headers, so stdio development traffic groups per process instead of collapsing to NULL.
 
 **Type consistency.** `writer.record(row: dict)` everywhere; `writer.record_hits(project, summary_ids, full_ids)` matches `_safe_hits`; `pricing.resolve` returns `(float | None, str | None)` and both call sites unpack two values; `queries.build_stats(conn, days, tz_offset_minutes, project, now)` is called with keywords in every caller; `client.fetch_stats` returns the same dict shape the dashboard reads.
 

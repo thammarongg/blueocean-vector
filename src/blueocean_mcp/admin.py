@@ -237,7 +237,12 @@ def cmd_restore(args: argparse.Namespace) -> None:
     for leftover in client.list_snapshots(collection_name=name):
         try:
             client.delete_snapshot(collection_name=name, snapshot_name=leftover.name)
-        except Exception as e:
+        # Best-effort sweep on purpose: whatever Qdrant raises here (network
+        # blip, snapshot already gone, permission quirk) must not turn a
+        # successful restore into a failure, and listing every exception type
+        # qdrant-client can throw would couple us to its internals. A warning
+        # is the honest response; the orphan costs disk, not correctness.
+        except Exception as e:  # noqa: BLE001 - intentional best-effort cleanup
             print(f"Warning: could not clean up leftover snapshot {leftover.name!r}: {e}")
 
     # Raised only after the cleanup above: an unrecorded audit row must not

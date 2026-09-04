@@ -141,7 +141,6 @@ async function load() {
 
   const panels = document.getElementById("panels");
   panels.replaceChildren(
-    panel("Calls per day", sparkline(s.daily)),
     panel("By tool", table(s.tools, ["tool", "calls", "p50_ms", "p95_ms", "errors"])),
     panel("By agent", table(s.agents, ["agent_name", "agent_version", "calls"])),
     panel("Search quality", table([s.quality],
@@ -153,7 +152,10 @@ async function load() {
     panel("Audit", table(s.audit, ["ts", "tool", "project", "deleted_count", "origin"]),
       "Rows marked cli-reported were sent by a client. This trail explains " +
       "accidents; with one shared token it cannot prove a row was not forged."),
-    panel("Recent errors", table(s.errors, ["ts", "tool", "error_class", "error_msg"]))
+    panel("Recent errors", table(s.errors, ["ts", "tool", "error_class", "error_msg"])),
+    // Not one of the spec's eight panels: the daily chart is supplementary,
+    // so it follows them rather than pushing the specified order down.
+    panel("Calls per day", sparkline(s.daily))
   );
 }
 
