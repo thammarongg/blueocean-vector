@@ -338,6 +338,16 @@ And the single id held by `claude-code` is *the same id* held by `zcode`:
 `9328de9ef3b24dc8a30924aff9c4c9b2` — 32 hex characters, the shape of `uuid4().hex` — spanning
 2026-09-04 15:26 to 2026-09-06 21:58 and covering three different `claude-code` versions.
 
+The alternative reading — that the server restarted mid-window and the ids merely *look*
+stable — is ruled out: `docker inspect blueocean-mcp` reports `StartedAt`
+2026-09-04T03:22:39Z (10:22 +07) with `RestartCount=0`, and the earliest event in the table
+is 09:39 +07 on 2026-09-04. The server process has run unbroken across the whole span, so
+`_PROCESS_SESSION_ID` was one constant value throughout, exactly as observed.
+
+(Footnote on the count: three further `claude-code` rows, all version 2.1.258, carry
+`session_id` NULL — they predate the fallback and are excluded from the distinct count by
+SQLite's `count(distinct …)`.)
+
 Two separately-developed products cannot share one MCP session id. The only explanation
 consistent with §5.1 is that both fell through to `_PROCESS_SESSION_ID`, i.e. **neither
 `claude-code` nor `zcode` echoes the `mcp-session-id` header at all.** For those two, a
