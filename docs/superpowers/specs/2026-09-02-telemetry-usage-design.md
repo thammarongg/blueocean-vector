@@ -508,6 +508,22 @@ classification survives, only the unverifiable text goes. The v2 migration
 nulls `error_msg` on existing `cli-reported` rows for the same reason; rows
 with `origin = 'observed'` are untouched by that sweep.
 
+`error_class` is kept only while it looks like one: a dotted identifier of at
+most 64 characters. The argument above is that a classification is
+server-checkable in a way free text is not, and that only holds while
+something actually checks it - otherwise the field is a second door for
+exactly the caller text `error_msg` was closed against. A value that fails
+the check is dropped rather than truncated, because 64 characters of
+someone's memory is still their memory.
+
+The other posted columns are typed too: `tool`, `project`, `area`, `module`
+and `agent_name` must be strings and are capped at 120 characters,
+`deleted_count` and `ok` must be integers, and anything else is dropped
+before the row is queued. That is a binding requirement as much as a privacy
+one - a value SQLite cannot bind raises inside the writer thread, and the
+self-disable rule in section 9 would then take telemetry down for the life of
+the process over one malformed request.
+
 Stated plainly in the docs and on the dashboard panel: **this audit trail is
 built to explain accidents, not to withstand a liar.** It answers "which agent
 pruned this project on 2026-08-17", which is the question that motivated it. It

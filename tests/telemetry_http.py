@@ -207,6 +207,48 @@ def _get(path: str, token: str | None = None) -> tuple[int, dict | str]:
         return e.code, e.read().decode()
 
 
+def _post(path: str, payload: dict, token: str | None = None) -> tuple[int, dict | str]:
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{PORT}{path}",
+        data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"},
+    )
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            raw = resp.read().decode()
+            try:
+                return resp.status, json.loads(raw)
+            except ValueError:
+                return resp.status, raw
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()
+
+
+def _wait_for_row(db_file: str, sql: str, params: tuple = ()) -> tuple | None:
+    """Poll until the background writer has drained the row, so a slow drain
+    cannot make an assertion pass vacuously.
+
+    Plain sqlite3, no PRAGMAs and no migrate: the server holds the file, and
+    db.connect()'s journal-mode/user_version writes collide with its lock.
+    """
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        try:
+            reader = sqlite3.connect(db_file)
+            try:
+                row = reader.execute(sql, params).fetchone()
+            finally:
+                reader.close()
+            if row is not None:
+                return row
+        except sqlite3.OperationalError:
+            pass
+        time.sleep(0.2)
+    return None
+
+
 def test_stats_requires_a_token() -> None:
     print("== /api/stats and /dashboard require the token ==")
     with tempfile.TemporaryDirectory() as d:
@@ -311,28 +353,11 @@ def test_audit_post_error_msg_is_discarded() -> None:
                     f"the request itself is fine and must stay accepted, got {resp.status}"
                 )
 
-            # The writer drains asynchronously; wait for the row to land
-            # before judging it, so a slow drain cannot pass vacuously.
-            # Plain sqlite3, no PRAGMAs and no migrate: the server holds the
-            # file, and db.connect()'s journal-mode/user_version writes
-            # collide with its lock.
-            deadline = time.time() + 10
-            row = None
-            while time.time() < deadline:
-                try:
-                    reader = sqlite3.connect(db_file)
-                    try:
-                        row = reader.execute(
-                            "SELECT error_msg, error_class FROM events"
-                            " WHERE tool = 'prune-failed' AND origin = 'cli-reported'"
-                        ).fetchone()
-                    finally:
-                        reader.close()
-                    if row is not None:
-                        break
-                except sqlite3.OperationalError:
-                    pass
-                time.sleep(0.2)
+            row = _wait_for_row(
+                db_file,
+                "SELECT error_msg, error_class FROM events"
+                " WHERE tool = 'prune-failed' AND origin = 'cli-reported'",
+            )
             assert row is not None, "audit row never landed in the database"
             assert row[0] is None, (
                 f"cli-reported error_msg must not be persisted, got {row[0]!r}"
@@ -340,6 +365,152 @@ def test_audit_post_error_msg_is_discarded() -> None:
             assert row[1] == "RuntimeError", (
                 f"error_class is server-checkable metadata and must survive, got {row[1]!r}"
             )
+        finally:
+            proc.terminate()
+            proc.wait(timeout=5)
+    print("  OK")
+
+
+def test_audit_payload_types_cannot_disable_the_writer() -> None:
+    """REGRESSION. The route allow-listed field NAMES but never their types,
+    so a posted value SQLite cannot bind - a list, an object - raised inside
+    writer._apply. writer._run answers a write failure by setting
+    disabled = True and returning, which is right for a broken backend and
+    wrong for one bad request: telemetry then stayed off for the life of the
+    process. Break this test catches: a hostile row followed by an ordinary
+    one, where the ordinary one never lands.
+    """
+    print("== a hostile audit payload does not take the writer down ==")
+    with tempfile.TemporaryDirectory() as d:
+        db_file = str(Path(d) / "t.db")
+        proc = _start_server({
+            "BLUEOCEAN_AUTH_TOKEN": "secret-token",
+            "BLUEOCEAN_TELEMETRY_DB": db_file,
+        })
+        try:
+            status, _ = _post("/api/audit", {
+                "tool": "prune-hostile",
+                "ok": [1],
+                "deleted_count": {"n": 1},
+                "project": {"nested": "object"},
+                "agent_name": ["a", "list"],
+            }, token="secret-token")
+            assert status == 202, f"unbindable values are dropped, not refused: {status}"
+
+            hostile = _wait_for_row(
+                db_file,
+                "SELECT project, deleted_count, ok, agent_name FROM events"
+                " WHERE tool = 'prune-hostile'",
+            )
+            assert hostile is not None, "the surviving fields should still record a row"
+            assert hostile[0] is None, f"a non-string project is dropped, got {hostile[0]!r}"
+            assert hostile[1] is None, f"a non-int deleted_count is dropped, got {hostile[1]!r}"
+            assert hostile[2] == 1, f"ok falls back to its default, got {hostile[2]!r}"
+            assert hostile[3] is None, f"a non-string agent_name is dropped, got {hostile[3]!r}"
+
+            status, _ = _post("/api/audit", {
+                "tool": "prune-after", "project": "p", "deleted_count": 3,
+            }, token="secret-token")
+            assert status == 202, status
+            after = _wait_for_row(
+                db_file,
+                "SELECT deleted_count FROM events WHERE tool = 'prune-after'",
+            )
+            assert after is not None, "the writer died on the hostile row and never recovered"
+            assert after[0] == 3, after
+        finally:
+            proc.terminate()
+            proc.wait(timeout=5)
+    print("  OK")
+
+
+def test_audit_error_class_must_look_like_a_class_name() -> None:
+    """PRIVACY. Section 8.1 keeps a posted error_class because it is "the
+    classification" - server-checkable metadata rather than the unverifiable
+    text that error_msg carries. Nothing used to check it, so the field was
+    a second route for arbitrary caller text to reach the database and sit
+    there for the retention window, which section 9 forbids. Break this test
+    catches: a prose blob stored verbatim under error_class.
+    """
+    print("== error_class must be class-shaped, blobs are dropped ==")
+    with tempfile.TemporaryDirectory() as d:
+        db_file = str(Path(d) / "t.db")
+        proc = _start_server({
+            "BLUEOCEAN_AUTH_TOKEN": "secret-token",
+            "BLUEOCEAN_TELEMETRY_DB": db_file,
+        })
+        try:
+            sentinel = f"SENTINEL-class-leak-{time.time_ns()} remembered that the key is hunter2"
+            status, _ = _post("/api/audit", {
+                "tool": "prune-blob", "error_class": sentinel, "ok": 0,
+            }, token="secret-token")
+            assert status == 202, status
+            blob = _wait_for_row(
+                db_file, "SELECT error_class FROM events WHERE tool = 'prune-blob'"
+            )
+            assert blob is not None, "the row itself is still accepted"
+            assert blob[0] is None, f"prose is not a class name, got {blob[0]!r}"
+
+            # A real qualified exception name is what the field is for.
+            status, _ = _post("/api/audit", {
+                "tool": "prune-dotted", "ok": 0,
+                "error_class": "qdrant_client.http.exceptions.UnexpectedResponse",
+            }, token="secret-token")
+            assert status == 202, status
+            dotted = _wait_for_row(
+                db_file, "SELECT error_class FROM events WHERE tool = 'prune-dotted'"
+            )
+            assert dotted is not None, "the dotted row never landed"
+            assert dotted[0] == "qdrant_client.http.exceptions.UnexpectedResponse", dotted
+
+            with sqlite3.connect(db_file) as reader:
+                dump = reader.execute("SELECT * FROM events").fetchall()
+            assert not any(sentinel in str(cell) for row in dump for cell in row), (
+                "the sentinel reached some column of the events table"
+            )
+        finally:
+            proc.terminate()
+            proc.wait(timeout=5)
+    print("  OK")
+
+
+def test_prices_without_a_usable_value_leaves_the_file_alone() -> None:
+    """REGRESSION. The non-empty check ran on the posted map but the numeric
+    filter ran after it, so {"m": "free"} passed the check, filtered down to
+    nothing, and wrote an empty pricing file - costing every model its price
+    and silently zeroing the cost column. Break this test catches: a 200 for
+    an unusable map, or a pricing file replaced by one with no prices.
+    """
+    print("== a price map with no usable values is refused, file untouched ==")
+    with tempfile.TemporaryDirectory() as d:
+        db_file = str(Path(d) / "t.db")
+        pricing_file = Path(d) / "pricing.json"
+        original = {
+            "fetched_at": 1,
+            "source": "openrouter",
+            "prices": {"openai/text-embedding-3-small": 0.02},
+        }
+        pricing_file.write_text(json.dumps(original))
+        proc = _start_server({
+            "BLUEOCEAN_AUTH_TOKEN": "secret-token",
+            "BLUEOCEAN_TELEMETRY_DB": db_file,
+            "BLUEOCEAN_PRICING_FILE": str(pricing_file),
+        })
+        try:
+            status, _ = _post(
+                "/api/prices", {"prices": {"some/model": "free"}}, token="secret-token"
+            )
+            assert status == 400, f"an unusable map must be refused, got {status}"
+            assert json.loads(pricing_file.read_text()) == original, (
+                "the pricing file was overwritten by a request that stored nothing"
+            )
+
+            status, body = _post(
+                "/api/prices", {"prices": {"some/model": 0.05}}, token="secret-token"
+            )
+            assert status == 200, (status, body)
+            written = json.loads(pricing_file.read_text())
+            assert written["prices"] == {"some/model": 0.05}, written
         finally:
             proc.terminate()
             proc.wait(timeout=5)
@@ -356,6 +527,9 @@ def main() -> None:
     test_disabled_returns_503_not_404()
     test_audit_row_cannot_claim_to_be_observed()
     test_audit_post_error_msg_is_discarded()
+    test_audit_payload_types_cannot_disable_the_writer()
+    test_audit_error_class_must_look_like_a_class_name()
+    test_prices_without_a_usable_value_leaves_the_file_alone()
     print("\nTELEMETRY HTTP TEST PASSED")
 
 

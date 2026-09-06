@@ -7,9 +7,10 @@ same bearer token as everything else.
 
 import json
 from pathlib import Path
+from typing import Any
 
 from starlette.requests import Request
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse, Response
 from starlette.routing import Route
 
 from . import db, is_enabled, pricing
@@ -22,6 +23,51 @@ _DISABLED_BODY = {
 }
 
 _DASHBOARD_HTML = Path(__file__).with_name("dashboard.html")
+
+# A posted audit row is checked by type as well as by name. The field lists
+# name the columns a caller may set; the three helpers below decide what a
+# value has to look like before it reaches SQLite. Without them a value
+# SQLite cannot bind (a list, an object) raises inside the writer thread,
+# and writer._run answers any write failure by disabling telemetry for the
+# life of the process - so one malformed POST would quietly end recording
+# until the next restart.
+_AUDIT_TEXT_MAX = 120
+_ERROR_CLASS_MAX = 64
+_AUDIT_TEXT_FIELDS = ("tool", "project", "area", "module", "agent_name")
+_AUDIT_INT_FIELDS = ("deleted_count", "ok")
+
+
+def _audit_text(value: Any) -> str | None:
+    """Keep a bounded string, drop anything else. project, area and module
+    are content-free dimensions by the spec's own reckoning (section 9), so
+    these are capped, never inspected."""
+    if not isinstance(value, str) or not value:
+        return None
+    return value[:_AUDIT_TEXT_MAX]
+
+
+def _audit_int(value: Any) -> int | None:
+    """Keep a real integer. bool is an int subclass, and would land as 0 or 1
+    for a caller who meant something else, so it is refused with the rest."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def _audit_error_class(value: Any) -> str | None:
+    """error_class survives on a posted row because section 8.1 calls it a
+    classification: "the classification survives, only the unverifiable text
+    goes". That reasoning holds only while the value really is a class name,
+    and nothing enforced it - so arbitrary caller text could reach the
+    database through this field exactly as it once did through error_msg.
+    A dotted identifier is kept; anything else is dropped rather than
+    truncated, because 64 characters of someone's memory is still memory.
+    """
+    if not isinstance(value, str) or not value or len(value) > _ERROR_CLASS_MAX:
+        return None
+    if not all(part.isidentifier() for part in value.split(".")):
+        return None
+    return value
 
 
 def _disabled() -> JSONResponse:
@@ -76,9 +122,19 @@ async def _audit(request: Request) -> JSONResponse:
     import time as _time
 
     # No error_msg here, on purpose: see the docstring above.
-    allowed = {"tool", "project", "area", "module", "deleted_count", "ok",
-               "error_class", "agent_name"}
-    row = {k: v for k, v in payload.items() if k in allowed}
+    row: dict[str, Any] = {}
+    for key in _AUDIT_TEXT_FIELDS:
+        text = _audit_text(payload.get(key))
+        if text is not None:
+            row[key] = text
+    for key in _AUDIT_INT_FIELDS:
+        number = _audit_int(payload.get(key))
+        if number is not None:
+            row[key] = number
+    error_class = _audit_error_class(payload.get("error_class"))
+    if error_class is not None:
+        row["error_class"] = error_class
+
     if not row.get("tool"):
         return JSONResponse({"error": "tool is required"}, 400)
     row["ts"] = int(_time.time())
@@ -106,14 +162,25 @@ async def _prices(request: Request) -> JSONResponse:
     except ValueError:
         return JSONResponse({"error": "body must be JSON"}, 400)
     prices = payload.get("prices") if isinstance(payload, dict) else None
-    if not isinstance(prices, dict) or not prices:
-        return JSONResponse({"error": "prices must be a non-empty object"}, 400)
-    clean = {str(k): float(v) for k, v in prices.items() if isinstance(v, (int, float))}
+    if not isinstance(prices, dict):
+        return JSONResponse({"error": "prices must be an object"}, 400)
+    clean = {
+        str(k): float(v)
+        for k, v in prices.items()
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+    }
+    # Tested after the filter, not before it: a map whose values are all
+    # unusable passes a non-empty check on the way in, and writing it would
+    # replace the pricing file with nothing, costing every model its price.
+    if not clean:
+        return JSONResponse(
+            {"error": "prices must contain at least one numeric price"}, 400
+        )
     pricing.write_file(None, clean)
     return JSONResponse({"status": "written", "models": len(clean)})
 
 
-async def _dashboard(_request: Request) -> HTMLResponse:
+async def _dashboard(_request: Request) -> Response:
     if not is_enabled():
         return _disabled()
     return HTMLResponse(
