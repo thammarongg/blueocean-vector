@@ -111,3 +111,66 @@ measured being ignored, so delivery is ruled out as the cause for this client �
 arrives, in full, every session.
 
 ### 1.4 Does it terminate MCP sessions cleanly? **No — see §5.**
+
+---
+
+## 2. `codex-mcp-client` 0.153.2
+
+The connecting versions were 0.153.0 and 0.153.2; 0.153.4 is installed now. All three are
+on disk under `~/.codex/packages/standalone/releases/`, so the version gap costs nothing —
+the findings below were read from **0.153.2, the version that actually connected**, and
+confirmed identical in 0.153.4.
+
+### 2.1 Does it have a session-end hook? **Yes.**
+
+The binary carries an interned enum of hook event names as one contiguous string. From
+`strings` over `.../0.153.2-aarch64-apple-darwin/bin/codex`:
+
+```
+PreToolUse PermissionRequest PostToolUse PreCompact PostCompact
+SessionStart SessionEnd UserPromptSubmit SubagentStart SubagentStop Stop Interrupt
+```
+
+(run together in the binary; spaced here for reading). `SessionEnd` is present, as are
+`PreCompact`/`PostCompact` and an `Interrupt` event the other clients do not have.
+
+This is the finding that most directly overturns the 2026-08-18 deferral. That deferral
+rested on "each tool would need its own separate mechanism (if it even has one) … unproven
+feasibility per-tool". Two of the four clients turn out to expose the *same* event under
+the *same* name, in the same `hooks.json`-shaped config format.
+
+### 2.2 Central or per-project? **Central.**
+
+`~/.codex/hooks.json` is a user-level file with the same `{event: [{hooks: [{type,
+command, timeout}]}]}` shape Claude Code uses. It currently wires eight events —
+`SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PermissionRequest`, `PostToolUse`,
+`SubagentStart`, `SubagentStop`, `Stop` — all to one dispatcher script. `SessionEnd` is
+available but not wired, exactly as in Claude Code.
+
+### 2.3 A second, older primitive: `notify`
+
+`~/.codex/config.toml` line 1 sets `notify = [<command>, "turn-ended"]`. The binary
+identifies this path as `legacy_notify` and carries the payload keys
+`agent-turn-complete`, `thread-id`, `turn-id`, `cwd`, `client`, `input-messages`,
+`last-assistant-message`.
+
+Worth recording because it is *turn*-scoped, not session-scoped, and it hands the caller
+`last-assistant-message`. It fires at the end of every turn — which is to say, repeatedly,
+including at the last turn before a session goes quiet. For a design whose floor is
+save-as-you-go, a per-turn signal is arguably a better fit than a per-session one. But it
+is marked legacy in the binary, superseded by the hook system above.
+
+### 2.4 Does it surface an MCP server's `instructions`? **Not established.**
+
+No `server_instructions`, `mcp_instructions` or equivalent string was found in the binary,
+against 435 occurrences of `instructions` overall — the ones that exist are
+`base_instructions`, `developer-instructions`, `plugins_instructions`,
+`subagent_developer_instructions`, `classifier_instructions`, none MCP-server-scoped.
+
+Stated as a negative result with its limit: absence from the string table is weaker
+evidence than the positive matches above, because the field could be handled without a
+distinctly-named literal. What can be said is that no primary source on this machine shows
+codex surfacing the field, and this server's `instructions` text has never been observed in
+a codex transcript.
+
+### 2.5 Does it terminate MCP sessions cleanly? **Yes — and it is the only one that does. See §5.**
