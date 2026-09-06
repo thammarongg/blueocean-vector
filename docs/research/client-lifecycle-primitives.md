@@ -247,3 +247,60 @@ to check by observation, as was possible for `claude-code` (§1.3). Recorded as 
 as a negative.
 
 ### 3.5 Does it terminate MCP sessions cleanly? **Yes. See §5.**
+
+---
+
+## 4. `zcode` 0.16.5 — the negative result
+
+Version note, stated because it is unresolved: the client identifies itself to this server
+as `zcode` version **0.16.5**, but the application on disk (`/Applications/ZCode.app`) is
+version **3.11.2** (`CFBundleVersion 3.11.2.6792`). These are different numbering schemes —
+most likely the app version and an embedded agent/CLI version — and no artefact was found
+that maps one to the other. The findings below are from the shipped 3.11.2 bundle. If the
+`0.16.5` component is versioned independently, they may not hold for it.
+
+### 4.1 Does it have hooks? **Yes — modelled on Claude Code's.**
+
+`/Applications/ZCode.app/Contents/Resources/app.asar` (a 307 MB Electron archive) carries a
+Zod schema whose `hookEventName` is a closed enum:
+
+```js
+hookEventName: t.enum(["SessionStart","UserPromptSubmit","PreToolUse",
+                       "PermissionRequest","PostToolUse","PostToolUseFailure","Stop"])
+```
+
+The same seven-member array appears at three independent sites in the bundle. Supporting
+evidence that this is a Claude Code lineage rather than a coincidence:
+`~/.zcode/cli/config.json` enables plugins named `code-review@claude-plugins-official`,
+`superpowers@claude-plugins-official`, `commit-commands@claude-plugins-official` and
+`feature-dev@claude-plugins-official` — the same marketplace this machine's Claude Code
+uses.
+
+### 4.2 Does it have a session-end hook? **No.**
+
+`SessionEnd` is absent from that enum, and the enum is closed. The 18 `SessionEnd`
+substring hits in the bundle are a **false positive** and are recorded here so the negative
+is not later re-litigated: they are all framer-motion drag-gesture code
+(`onSessionEnd`, `handlePointerUp`, `dragSnapToOrigin`), a UI animation library, unrelated
+to agent sessions.
+
+`PreCompact` is absent outright; the 18 `PostCompact` hits are likewise false positives —
+`postCompactTokenCount` and `truePostCompactTokenCount` telemetry fields, not an event.
+
+The closest thing zcode has is **`Stop`**, which fires at the end of an assistant response,
+not at the end of a session. Turn-scoped, like codex's `notify` (§2.3), and for the same
+reason it is a plausible carrier for a save-as-you-go floor and no use at all for detecting
+an ending.
+
+### 4.3 Central or per-project? **Central.**
+
+`~/.zcode/cli/config.json` is user-level and already holds this machine's `mcp.servers`
+entry for the server, so hooks configured there would apply across projects. Hook
+configuration was not present in that file to confirm the key name by observation.
+
+### 4.4 Does it surface an MCP server's `instructions`? **Not established.**
+
+Not determined from the bundle, and no zcode transcript was available on this machine to
+check by observation.
+
+### 4.5 Does it terminate MCP sessions cleanly? **No. See §5.**
