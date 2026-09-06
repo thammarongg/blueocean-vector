@@ -338,6 +338,7 @@ sudo chown -R 10001:10001 data && docker compose restart blueocean-mcp
 - **`qdrant-client` is pinned to the Qdrant server's exact version** (see the image tag in `docker-compose.yml`). Qdrant versions its client and server in lockstep, and the API has changed between releases — `.search()` was removed in favor of `.query_points()` in 1.19. If you bump the server image, bump `qdrant-client` to match and re-run the test suite; don't jump several versions on real data without a snapshot first.
 - **`mcp` is pinned `>=2.0.0,<3.0.0`**, tighter than most dependencies here. Its API (`mcp.server.mcpserver.MCPServer` and friends) has changed shape significantly between releases, and a loose constraint risks a Docker build silently resolving something incompatible — Docker builds don't use `uv.lock`.
 - **Embedding provider and model are a matched pair.** Switch either one and old vectors become unsearchable garbage against new ones. Pin the model in `.env` rather than trusting a library default that might change out from under you.
+- **Project vocabulary lives in [`CONTEXT.md`](CONTEXT.md), and one term is a live trap.** "Summary" covers two things that do not substitute for one another: a *Session Summary* is written by an agent and carries what was decided and why, while a *Session Trace* is composed by the server and records only what a session touched. Only the first exists today (`memory_summarize_session`); the second is a decided design, not shipped. Read the glossary before naming anything new in this codebase.
 
 ---
 
