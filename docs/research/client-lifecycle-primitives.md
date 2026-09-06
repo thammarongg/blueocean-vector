@@ -173,7 +173,7 @@ distinctly-named literal. What can be said is that no primary source on this mac
 codex surfacing the field, and this server's `instructions` text has never been observed in
 a codex transcript.
 
-### 2.5 Does it terminate MCP sessions cleanly? **Yes — and it is the only one that does. See §5.**
+### 2.5 Does it terminate MCP sessions cleanly? **It carries a session id, which is the precondition. See §5.**
 
 ---
 
@@ -246,7 +246,7 @@ surface rather than prompt assembly. No opencode transcript on this machine was 
 to check by observation, as was possible for `claude-code` (§1.3). Recorded as unknown, not
 as a negative.
 
-### 3.5 Does it terminate MCP sessions cleanly? **Yes. See §5.**
+### 3.5 Does it terminate MCP sessions cleanly? **It carries a session id, which is the precondition. See §5.**
 
 ---
 
@@ -304,3 +304,135 @@ Not determined from the bundle, and no zcode transcript was available on this ma
 check by observation.
 
 ### 4.5 Does it terminate MCP sessions cleanly? **No. See §5.**
+
+---
+
+## 5. Session termination, measured — and a correction to #4
+
+### 5.1 How the server derives a session id
+
+`src/blueocean_mcp/telemetry/instrument.py`:
+
+```python
+_PROCESS_SESSION_ID = uuid.uuid4().hex          # line 42, generated once at import
+...
+out["session_id"] = headers.get("mcp-session-id") or _PROCESS_SESSION_ID   # line 125
+```
+
+So a client that echoes the `mcp-session-id` header gets a real per-session id, and a
+client that does not gets **the server process's own uuid** — the same value for every such
+client, stable for the life of the server process.
+
+### 5.2 What the live table shows
+
+From `data/telemetry.db`, distinct `session_id` values per client:
+
+| Client | distinct `session_id` | events |
+| --- | --- | --- |
+| `codex-mcp-client` | 13 | 40 |
+| `opencode` | 2 | 5 |
+| `claude-code` | **1** | 31 |
+| `zcode` | **1** | 4 |
+
+And the single id held by `claude-code` is *the same id* held by `zcode`:
+`9328de9ef3b24dc8a30924aff9c4c9b2` — 32 hex characters, the shape of `uuid4().hex` — spanning
+2026-09-04 15:26 to 2026-09-06 21:58 and covering three different `claude-code` versions.
+
+Two separately-developed products cannot share one MCP session id. The only explanation
+consistent with §5.1 is that both fell through to `_PROCESS_SESSION_ID`, i.e. **neither
+`claude-code` nor `zcode` echoes the `mcp-session-id` header at all.** For those two, a
+spec-conformant `DELETE` is not merely unobserved, it is impossible: they hold no id to
+delete.
+
+`codex-mcp-client` rotating through 13 ids and `opencode` through 2 shows those clients do
+carry the header and do start fresh sessions per run. Whether they also send an explicit
+`DELETE` on exit is *not* established here — the server's logs record only outbound Qdrant
+calls, no inbound request line, so there is nothing to read. Carrying an id is the
+precondition for clean termination, not proof of it.
+
+### 5.3 The correction
+
+[#4](https://github.com/thammarongg/blueocean-vector/issues/4) recorded this defect as
+"the server's `session_id` is not a session unit for HTTP clients … only stdio (codex) ids
+behave correctly."
+
+**The transport half of that is wrong.** All four clients connect over HTTP on this
+machine, codex included:
+
+| Client | Config file | Entry |
+| --- | --- | --- |
+| `claude-code` | `~/.claude.json` | `"type": "http"`, `http://localhost:8765/mcp` (confirmed by `claude mcp list`: "blueocean: http://localhost:8765/mcp (HTTP) - ✔ Connected") |
+| `codex-mcp-client` | `~/.codex/config.toml` | `[mcp_servers.blueocean] url = "http://localhost:8765/mcp?token=…"` |
+| `opencode` | `~/.config/opencode/opencode.jsonc` | `"type": "remote"`, same URL |
+| `zcode` | `~/.zcode/cli/config.json` | `"type": "http"`, same URL |
+
+The split is not stdio versus HTTP. It is **whether the client echoes `mcp-session-id`** —
+codex and opencode do, claude-code and zcode do not. The `_PROCESS_SESSION_ID` fallback was
+written for stdio (its comment says so) and is silently absorbing two HTTP clients that
+should never have reached it.
+
+The finding #4 drew from this stands and gets stronger: for half the traffic there is no
+session unit, so nothing keyed to a session id can count, group, or expire correctly.
+
+---
+
+## 6. Summary
+
+| | `claude-code` 2.1.263 | `codex-mcp-client` 0.153.2 | `opencode` 1.18.27 | `zcode` 0.16.5 |
+| --- | --- | --- | --- | --- |
+| Hook/event system | yes | yes | yes (plugin) | yes |
+| **Session-end event** | **`SessionEnd`** | **`SessionEnd`** | **`session.idle`, `session.deleted`, `server.instance.disposed`** | **none** |
+| Compaction event | `PreCompact`, `PostCompact` | `PreCompact`, `PostCompact` | `session.compacted`, `experimental.session.compacting` | none |
+| Turn-scoped event | `Stop` | `Stop`, legacy `notify` | `session.status` | `Stop` |
+| Central config | `~/.claude/settings.json` | `~/.codex/hooks.json` | `~/.config/opencode/` + npm plugin | `~/.zcode/cli/config.json` |
+| Surfaces `instructions` | yes, once at start (observed) | not established | not established | not established |
+| Carries `mcp-session-id` | **no** | yes | yes | **no** |
+
+## 7. What this means for the map
+
+**The 2026-08-18 deferral does not survive.** It rested on "each tool would need its own
+separate mechanism (if it even has one) … unproven feasibility per-tool". Three of four
+clients have a session-end primitive, two of them under the *same event name* in the *same
+config shape*, and all four take central user-level configuration. Feasibility is no longer
+unproven; it is demonstrated for 3 of 4.
+
+**But it stays a per-tool mechanism, and the map ranks that below protocol-level.** The
+standing preference — "a mechanism keyed to a list of tool names breaks every time a new
+client appears, and two already have" — applies with full force here: `zcode` is exactly
+the new client that appeared and it is exactly the one with no session-end event. This note
+reports the mechanism exists; it does not argue for adopting it.
+
+**What a hook can and cannot carry.** Per §0, a `SessionEnd` command runs after the agent
+is gone. It cannot write a summary. It can tell the server an ending happened — which is a
+direct input to [#6](https://github.com/thammarongg/blueocean-vector/issues/6), and the
+first evidence in this map that #6 has an answer better than a server-side idle guess. For
+three clients #6 can be *told*; for `zcode` it must still guess.
+
+**`session.idle` is the shape #6 provisionally wanted.** #6 settled provisionally on a
+server-side idle timeout "because it works identically across transports". opencode already
+computes exactly that client-side and emits it with a `sessionID`. Worth weighing whether
+#6's answer is "the server guesses" or "the server accepts a signal where one exists and
+guesses only where it does not" — the second is more accurate and less uniform.
+
+**Two turn-scoped primitives exist that nobody was looking for.** codex's legacy `notify`
+carries `last-assistant-message` at the end of *every* turn, and every client has a
+`Stop`-equivalent. For a design whose floor is save-as-you-go
+([#9](https://github.com/thammarongg/blueocean-vector/issues/9)), a per-turn signal fits
+better than a per-session one, and it exists on all four clients — including `zcode`. This
+is the only mechanism found here with 4-of-4 coverage.
+
+**A blocker for anything keyed to sessions.** Per §5, `claude-code` and `zcode` — 35 of 80
+recorded events — carry no session id at all. Any mechanism that identifies, counts or
+expires a session must fix that first, or restrict itself to the two clients that do.
+
+### Feeds
+
+- [#6](https://github.com/thammarongg/blueocean-vector/issues/6) — unblocked. Three clients
+  can signal an ending; the fourth cannot. `session.idle` is a better primitive than the
+  idle timeout #6 assumed.
+- [#7](https://github.com/thammarongg/blueocean-vector/issues/7) — a `SessionEnd` command
+  runs agent-less, so the floor tier's quality bar is bounded by what a shell command and
+  the server's own observations can produce.
+- [#8](https://github.com/thammarongg/blueocean-vector/issues/8) — the ceiling is now
+  measurable: 3 of 4 clients for session-end, 4 of 4 for turn-end, 2 of 4 for anything
+  keyed to a session id.
