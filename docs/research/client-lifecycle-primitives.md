@@ -174,3 +174,76 @@ codex surfacing the field, and this server's `instructions` text has never been 
 a codex transcript.
 
 ### 2.5 Does it terminate MCP sessions cleanly? **Yes — and it is the only one that does. See §5.**
+
+---
+
+## 3. `opencode` 1.18.27
+
+Version note: 1.18.27 connected, the binary at `~/.opencode/bin/opencode` is now 1.18.29,
+and the typed plugin/SDK packages vendored under `~/.config/opencode/node_modules/` are
+1.18.13. The findings below come from the vendored **type declarations**, which are the
+oldest of the three — so anything found there is, if anything, understated for the version
+that connected.
+
+### 3.1 Does it have session lifecycle events? **Yes — the richest of the four.**
+
+`@opencode-ai/sdk/dist/gen/types.gen.d.ts` declares a typed event union. The
+session-scoped and server-scoped members:
+
+| Event `type` | Payload |
+| --- | --- |
+| `session.idle` | `{ sessionID }` |
+| `session.created` | — |
+| `session.deleted` | — |
+| `session.compacted` | — |
+| `session.error` | — |
+| `session.status` | `{ sessionID, status }` |
+| `session.updated`, `session.diff` | — |
+| `server.connected` | — |
+| `server.instance.disposed` | — |
+
+`EventSessionIdle` is declared exactly as:
+
+```ts
+export type EventSessionIdle = {
+    type: "session.idle";
+    properties: {
+        sessionID: string;
+    };
+};
+```
+
+This is the closest thing any of the four clients has to the primitive
+[#6](https://github.com/thammarongg/blueocean-vector/issues/6) is looking for. It is not
+"the session ended" — it is "the session went quiet", which is precisely the
+idle-timeout-shaped signal #6 provisionally settled on, except computed by the client
+instead of guessed at by the server. `session.deleted` and `server.instance.disposed`
+cover the harder endings.
+
+### 3.2 How is it consumed? **A plugin, installed as an npm dependency.**
+
+`@opencode-ai/plugin/dist/index.d.ts` declares the `Hooks` interface a plugin returns.
+Relevant members: a generic `event?: (input: { event: Event }) => Promise<void>` — a
+firehose over the union above — plus `dispose?: () => Promise<void>`,
+`experimental.session.compacting`, `chat.message`, `chat.params`, `chat.headers`,
+`permission.ask`, `command.execute.before`, `tool.execute.before`, `config`, `auth`,
+`provider` and `tool`.
+
+Two of these matter here. `event` means a plugin can subscribe to `session.idle` without
+polling. `dispose` gives the plugin a shutdown callback of its own.
+
+### 3.3 Central or per-project? **Central.**
+
+`~/.config/opencode/opencode.jsonc` is the user-level config (it is where this machine's
+`mcp.blueocean-vector` remote entry lives), and `~/.config/opencode/package.json` carries
+the plugin dependency — currently `@opencode-ai/plugin@1.18.13`. So a plugin installs once
+per user, not once per project.
+
+### 3.4 Does it surface an MCP server's `instructions`? **Not established.**
+
+Not answerable from the vendored type declarations, which describe the plugin and SDK
+surface rather than prompt assembly. No opencode transcript on this machine was available
+to check by observation, as was possible for `claude-code` (§1.3). Recorded as unknown, not
+as a negative.
+
+### 3.5 Does it terminate MCP sessions cleanly? **Yes. See §5.**
