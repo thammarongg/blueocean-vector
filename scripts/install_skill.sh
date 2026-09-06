@@ -35,12 +35,24 @@ tool_dir() {
   esac
 }
 
+# The repo carries the skill's text, so a fresh clone can install it. The
+# canonical copy under $HOME stays the one every tool symlinks to, and an
+# existing one is never overwritten: a machine may have local edits, and
+# clobbering them silently would lose work with no way to get it back.
+REPO_SKILL="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/skills/$SKILL_NAME/SKILL.md"
+
 ensure_canonical() {
-  if [ ! -f "$CANONICAL_DIR/SKILL.md" ]; then
+  if [ -f "$CANONICAL_DIR/SKILL.md" ]; then
+    return
+  fi
+  if [ ! -f "$REPO_SKILL" ]; then
     echo "!! Canonical skill not found at $CANONICAL_DIR/SKILL.md"
-    echo "   (this script only links to it, it doesn't create the content)"
+    echo "   and no copy to seed it from at $REPO_SKILL"
     exit 1
   fi
+  mkdir -p "$CANONICAL_DIR"
+  cp "$REPO_SKILL" "$CANONICAL_DIR/SKILL.md"
+  echo "+ seeded canonical skill: $CANONICAL_DIR/SKILL.md (from $REPO_SKILL)"
 }
 
 status_for() {

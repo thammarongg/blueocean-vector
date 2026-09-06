@@ -147,7 +147,7 @@ Registering the server gets the tools *available*; it doesn't make an agent reac
 ./scripts/install_skill.sh --list   # see what's installed where
 ```
 
-It's one canonical `SKILL.md`, symlinked into each tool's own skills directory — edit it once, every tool picks up the change.
+It's one canonical `SKILL.md`, symlinked into each tool's own skills directory — edit it once, every tool picks up the change. The repo carries a copy at `skills/blueocean-memory/SKILL.md`, and the installer seeds `~/.agents` from it on a machine that doesn't have it yet; an existing canonical file is never overwritten, so local edits survive.
 
 ### Alternative: stdio (per-agent local process)
 
