@@ -28,3 +28,6 @@ wheels/
 
 # Telemetry database and price cache, bind-mounted into the container.
 data/
+
+# Local agent worktrees and session scratch, not project content
+.claude/
