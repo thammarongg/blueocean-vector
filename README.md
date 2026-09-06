@@ -149,6 +149,8 @@ Registering the server gets the tools *available*; it doesn't make an agent reac
 
 It's one canonical `SKILL.md`, symlinked into each tool's own skills directory — edit it once, every tool picks up the change. The repo carries a copy at `skills/blueocean-memory/SKILL.md`, and the installer seeds `~/.agents` from it on a machine that doesn't have it yet; an existing canonical file is never overwritten, so local edits survive.
 
+To update an installed skill from the repository, use `./scripts/update.sh` as described in [Updating an existing installation](#updating-an-existing-installation). It compares the files and backs up the installed skill before replacing it when different. Running the installer again does not update an existing skill.
+
 ### Alternative: stdio (per-agent local process)
 
 No Docker available, or you'd rather not run a shared server? Run:
@@ -158,6 +160,69 @@ uv run blueocean-mcp --transport stdio --qdrant-url http://localhost:6333
 ```
 
 and point the tool's MCP config at the `command` (see `.venv/bin/blueocean-mcp`) instead of a `url`.
+
+---
+
+## Updating an existing installation
+
+From your existing `blueocean-vector` checkout, commit or stash any local changes first, then run:
+
+```bash
+./scripts/update.sh
+```
+
+The script stops if the checkout has local changes, pulls from the current branch's upstream with `--ff-only`, syncs local Python dependencies, rebuilds the MCP server, and waits up to 180 seconds for the services to become healthy. It stops on failure; earlier successful steps are not rolled back.
+
+After the runtime update succeeds, it compares `skills/blueocean-memory/SKILL.md` in the updated repository with `~/.agents/skills/blueocean-memory/SKILL.md`:
+
+- **Identical:** skips the skill without rewriting it.
+- **Different:** backs up the installed file as `SKILL.md.bak.<unique suffix>` beside it, then replaces it with the repository version. Local customizations remain in the backup; they are not merged automatically.
+- **Missing:** creates the shared skill from the repository copy.
+
+Agents linked to the shared skill receive the updated file. Start a new agent session to load the new instructions. Manually installed copies elsewhere are not updated; use `./scripts/install_skill.sh --list` to inspect your installation. The update script does not register new clients or create agent symlinks; use `./scripts/install_skill.sh all` for initial skill installation.
+
+For a **stdio installation**, run:
+
+```bash
+./scripts/update.sh --stdio
+```
+
+This pulls code, syncs dependencies, and updates the skill without invoking Docker. Restart the MCP process through your client afterward.
+
+If your checkout predates `scripts/update.sh`, first run `git pull --ff-only` to get it. Alternatively, update the runtime manually with these commands, one at a time (these do not update the installed skill):
+
+```bash
+# Check for local changes before pulling
+git status --short
+
+# Download the latest code from your branch's upstream
+git pull --ff-only
+
+# Rebuild and replace the shared MCP server with the updated code
+docker compose up -d --build blueocean-mcp
+
+# Update local Python dependencies for tools such as blueocean-admin
+uv sync --extra dev
+```
+
+If you have local changes, commit or stash them before pulling. If `git pull --ff-only` fails, stop and resolve the Git issue before continuing. The MCP server is briefly unavailable while its container is replaced. A plain `docker compose restart` does not rebuild the image and therefore does not apply source-code changes.
+
+Check that the services are ready after the update:
+
+```bash
+docker compose ps
+curl -fsS http://localhost:8765/health
+```
+
+Wait for both services to show `healthy` and for `/health` to return `"status":"ok"`. If the server does not become healthy, inspect its logs:
+
+```bash
+docker compose logs --tail=100 blueocean-mcp
+```
+
+Reconnect the MCP client if it lost its connection during the update. You do not need to register the server again unless its URL or authentication token changed.
+
+Memory persists in the `qdrant_storage` Docker volume, and telemetry and pricing data persist in `./data`. Keep the same checkout, Compose project name, and `.env` when updating. **Do not run `docker compose down -v` as an update step:** it deletes the Compose-managed volumes, including the stored memory. Keep `./data` as well.
 
 ---
 
