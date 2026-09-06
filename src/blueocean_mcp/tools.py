@@ -8,6 +8,11 @@ from .config import DEFAULT_MAX_TOKENS, DEFAULT_TOP_K
 from .token_budget import allocate
 from .vector_store import VectorStore
 
+# Where a session summary lands when the caller doesn't name a module. One
+# module per area, rather than one per session, so the manifest stays a list
+# of subjects instead of a list of session ids.
+SESSION_MODULE = "sessions"
+
 
 def register_tools(mcp: MCPServer, store: VectorStore) -> None:
     def memory_store(
@@ -46,6 +51,8 @@ def register_tools(mcp: MCPServer, store: VectorStore) -> None:
         time_range_start: int | None = None,
         time_range_end: int | None = None,
         importance_min: int | None = None,
+        kind: str | None = None,
+        exclude_kinds: list[str] | None = None,
     ) -> dict:
         """Semantically search a project's memory.
 
@@ -53,6 +60,12 @@ def register_tools(mcp: MCPServer, store: VectorStore) -> None:
         ``full`` layer (full content of the top matches that fit within
         ``max_tokens``). Scope with ``area``/``module``/``time_range``/
         ``importance_min`` to keep large project collections fast and cheap.
+
+        ``kind`` returns only entries of that kind; ``exclude_kinds`` omits
+        them. Session-level records are written with ``kind`` set (e.g.
+        ``session_summary``), so these are how you keep them out of an
+        ordinary search, or ask for only them. Entries stored without a
+        ``kind`` are never dropped by ``exclude_kinds``.
         """
         time_range = None
         if time_range_start is not None or time_range_end is not None:
@@ -68,6 +81,8 @@ def register_tools(mcp: MCPServer, store: VectorStore) -> None:
             module=module,
             time_range=time_range,
             importance_min=importance_min,
+            kind=kind,
+            exclude_kinds=exclude_kinds,
         )
         return allocate(candidates, max_tokens).to_dict()
 
@@ -104,12 +119,19 @@ def register_tools(mcp: MCPServer, store: VectorStore) -> None:
         observations: list[str],
         conclusion: str,
         importance: int = 3,
+        module: str = SESSION_MODULE,
     ) -> str:
         """Store a condensed summary of a work session for later retrieval.
 
         ``observations`` are short bullet facts; ``conclusion`` is the outcome.
         Combined into one entry so a new agent can quickly pick up context
         without re-summarizing.
+
+        ``module`` defaults to a single shared module per area. It used to be
+        the session id, which minted a throwaway module per session and left
+        manifests full of one-off ids that say nothing about their contents.
+        Pass the module the session actually worked on when you know it; the
+        session id is recorded in metadata either way.
         """
         content = (
             f"Session {session_id} observations:\n"
@@ -120,7 +142,7 @@ def register_tools(mcp: MCPServer, store: VectorStore) -> None:
         return store.store(
             project=project,
             area=area,
-            module=session_id,
+            module=module,
             content=content,
             summary=summary,
             importance=importance,

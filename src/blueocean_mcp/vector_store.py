@@ -219,8 +219,22 @@ class VectorStore:
         module: str | None,
         time_range: tuple[int, int] | None,
         importance_min: int | None,
+        kind: str | None = None,
+        exclude_kinds: list[str] | None = None,
     ) -> qmodels.Filter | None:
         conditions: list[qmodels.FieldCondition] = []
+        # Excluded kinds go in must_not. An entry stored before `kind` existed
+        # has no such payload key, so it matches no kind condition and passes
+        # the exclusion -- which is what we want: excluding a kind must never
+        # silently drop the ordinary entries.
+        exclusions: list[qmodels.FieldCondition] = [
+            qmodels.FieldCondition(key="kind", match=qmodels.MatchValue(value=k))
+            for k in (exclude_kinds or [])
+        ]
+        if kind:
+            conditions.append(
+                qmodels.FieldCondition(key="kind", match=qmodels.MatchValue(value=kind))
+            )
         if area:
             conditions.append(
                 qmodels.FieldCondition(key="area", match=qmodels.MatchValue(value=area))
@@ -245,9 +259,9 @@ class VectorStore:
                     range=qmodels.Range(gte=time_range[0], lte=time_range[1]),
                 )
             )
-        if not conditions:
+        if not conditions and not exclusions:
             return None
-        return qmodels.Filter(must=conditions)
+        return qmodels.Filter(must=conditions or None, must_not=exclusions or None)
 
     def search(
         self,
@@ -259,6 +273,8 @@ class VectorStore:
         module: str | None = None,
         time_range: tuple[int, int] | None = None,
         importance_min: int | None = None,
+        kind: str | None = None,
+        exclude_kinds: list[str] | None = None,
     ) -> list[dict]:
         self._ensure_collection(project)
         vector = self._embedder.embed_query(query)
@@ -269,7 +285,7 @@ class VectorStore:
             query=vector,
             limit=clamp_top_k(top_k),
             query_filter=self._scope_filter(
-                area, module, time_range, importance_min
+                area, module, time_range, importance_min, kind, exclude_kinds
             ),
         )
         hits = response.points

@@ -166,12 +166,12 @@ and point the tool's MCP config at the `command` (see `.venv/bin/blueocean-mcp`)
 | Tool | What it does |
 |---|---|
 | `memory_store` | Save an entry — content, a condensed summary, an importance score, and area/module tags |
-| `memory_search` | Semantic search, token-budgeted: cheap summaries first, full content for what fits |
+| `memory_search` | Semantic search, token-budgeted: cheap summaries first, full content for what fits. Scope by area/module/importance/time, and by `kind` — `kind="session_summary"` for only session records, `exclude_kinds=["session_summary"]` to keep them out |
 | `memory_get` | Fetch one entry's full content by ID |
 | `memory_delete` | Remove one entry by ID |
 | `memory_list_projects` | List every project that has a memory collection |
 | `memory_manifest` | See what areas/modules exist before searching, so you scope the query sensibly |
-| `memory_summarize_session` | Leave a condensed handoff note for whichever agent picks this up next |
+| `memory_summarize_session` | Leave a condensed handoff note for whichever agent picks this up next. Lands in the `sessions` module of the given area unless you pass a `module`; the session id goes to metadata, not the manifest |
 | `memory_stats` | Counts and distribution, mostly for admin/debugging |
 
 A reasonable agent workflow: call `memory_manifest` then `memory_search` at the start of a session to load context cheaply; `memory_store` real decisions as you go (importance 5 for "why we chose X over Y", importance 3 for routine status); call `memory_summarize_session` before switching tools or running low on budget.
