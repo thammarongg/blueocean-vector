@@ -18,6 +18,7 @@ from ._hermes import load_plugin_module
 
 config = load_plugin_module("config")
 text = load_plugin_module("text")
+project = load_plugin_module("project")
 
 
 def test_config() -> None:
@@ -197,6 +198,85 @@ def test_unseen_and_format() -> None:
     print("  OK")
 
 
+def test_match_project() -> None:
+    print("== project: names found in Thai/English text, not inside tokens ==")
+    known = ["blueocean", "blueocean-vector", "kops", "tidepool", "thalassaops",
+             "auth-test-project"]
+    ignore = ["*test*", "*-project", "probe-*", "*-probe"]
+    cases = {
+        "ช่วยดู blueocean-vector หน่อย": "blueocean-vector",
+        # \b would see no boundary between Thai letters and the name.
+        "ดูblueocean-vectorให้หน่อย": "blueocean-vector",
+        "BlueOcean-Vector status?": "blueocean-vector",
+        "just blueocean please": "blueocean",
+        "kopsctl is a different tool": None,
+        "open ~/Projects/Repo/kops/main.go": "kops",
+        "auth-test-project and tidepool": "tidepool",
+        "tidepool and thalassaops": "thalassaops",
+        "nothing relevant here": None,
+        "": None,
+    }
+    for message, expected in cases.items():
+        got = project.match_project(message, known, ignore)
+        assert got == expected, f"{message!r}: expected {expected!r}, got {got!r}"
+    assert project.match_project(None, known, ignore) is None
+    print("  OK")
+
+
+def test_tracker() -> None:
+    print("== project: latest signal wins, per session, seen ids ==")
+    known, ignore = ["tidepool", "thalassaops", "kops"], []
+    t = project.ProjectTracker()
+    assert t.observe("s1", "work on tidepool", known, ignore) == "tidepool"
+    assert t.observe("s1", "now continue", known, ignore) == "tidepool", "must be sticky"
+    assert t.observe("s1", "switch to thalassaops", known, ignore) == "thalassaops"
+    t.set_active("s1", "kops")
+    assert t.active("s1") == "kops"
+    assert t.active("s2") is None, "sessions must not share a project"
+
+    t.mark_seen("s1", ["x", "y"])
+    snapshot = t.seen("s1")
+    snapshot.add("z")
+    assert t.seen("s1") == {"x", "y"}, "seen() must return a copy"
+
+    t.switch("s1", "s1", carry_project=True)  # rewound: same id
+    assert t.active("s1") == "kops" and t.seen("s1") == set()
+
+    t.mark_seen("s1", ["x"])
+    t.switch("s1", "s3", carry_project=True)  # compression / resume
+    assert t.active("s3") == "kops" and t.seen("s3") == set()
+
+    t.switch("s3", "s4", carry_project=False)  # /new, /reset
+    assert t.active("s4") is None
+    print("  OK")
+
+
+def test_catalog() -> None:
+    print("== project: catalog caches for its TTL and survives failures ==")
+    now = [1000.0]
+    calls = []
+    responses = [["b", "a"], RuntimeError("down"), ["c"]]
+
+    def fetch():
+        calls.append(1)
+        value = responses[len(calls) - 1]
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    cat = project.ProjectCatalog(fetch, ttl=300.0, clock=lambda: now[0])
+    assert cat.names() == ["a", "b"] and len(calls) == 1
+    assert cat.names() == ["a", "b"] and len(calls) == 1, "must serve from cache"
+    now[0] += 301
+    assert cat.names() == ["a", "b"] and len(calls) == 2, "failed refresh keeps the old list"
+    now[0] += 301
+    assert cat.names() == ["c"] and len(calls) == 3
+
+    empty = project.ProjectCatalog(lambda: (_ for _ in ()).throw(RuntimeError("down")))
+    assert empty.names() == [], "no cache and a failed fetch must give []"
+    print("  OK")
+
+
 def main() -> None:
     test_config()
     test_fence_and_redaction()
@@ -204,6 +284,9 @@ def main() -> None:
     test_bounded_work()
     test_turn_cleaning()
     test_unseen_and_format()
+    test_match_project()
+    test_tracker()
+    test_catalog()
     print("\nHERMES LOGIC TEST PASSED")
 
 
