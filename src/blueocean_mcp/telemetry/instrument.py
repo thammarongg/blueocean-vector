@@ -23,7 +23,7 @@ from typing import Any
 
 from mcp.server.mcpserver import Context
 
-from ..config import DEFAULT_EMBEDDING_PROVIDER
+from ..config import DEFAULT_EMBEDDING_PROVIDER, TRACE_KINDS
 from ..health import resolve_embedding_model
 from . import pricing, usage
 from .writer import get_writer
@@ -185,9 +185,15 @@ def _extract_store(kwargs: dict, result: Any) -> tuple[dict, tuple | None]:
     Rows used to appear only when an entry was HIT, which made hits = 0
     unreachable: the panel could only ever rank the entries that HAD been
     retrieved. memory_store returns the point id as a bare string.
+
+    Trace kinds are not seeded: a default search never returns them, so every
+    Turn Trace would sit in "never retrieved" and bury the entries it is for.
     """
     project = kwargs.get("project")
     if not project or not isinstance(result, str) or not result:
+        return {}, None
+    metadata = kwargs.get("metadata")
+    if isinstance(metadata, dict) and metadata.get("kind") in TRACE_KINDS:
         return {}, None
     return {}, ("seed", project, [result])
 

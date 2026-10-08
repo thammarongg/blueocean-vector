@@ -17,6 +17,7 @@ from typing import ClassVar
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.utilities.context_injection import find_context_parameter
 
+from blueocean_mcp.config import TRACE_KINDS
 from blueocean_mcp.telemetry import writer
 from blueocean_mcp.telemetry.instrument import INSTRUMENT_DENYLIST, instrument
 
@@ -339,6 +340,43 @@ def test_stored_entries_are_seeded_so_never_retrieved_is_knowable() -> None:
             ).fetchone()[0]
             assert hits == 1, f"re-seeding must not clobber a real count: {hits}"
             conn.close()
+        finally:
+            w.stop()
+    print("  OK")
+
+
+def test_trace_kinds_are_not_seeded() -> None:
+    """A Turn Trace is written every Hermes turn and is never returned by a default
+    search, so seeding it would bury the real entries in the "never retrieved" panel
+    and memory_usage's unused list.
+    """
+    print("== a trace-kind store is not seeded; an ordinary store still is ==")
+    assert TRACE_KINDS, "this test needs at least one trace kind (BLUEOCEAN_TRACE_KINDS)"
+    with tempfile.TemporaryDirectory() as d:
+        w = _writer_in(d)
+        try:
+            ids = iter(["trace-point", "plain-point", "other-kind-point"])
+
+            def memory_store(project: str, area: str, module: str, content: str,
+                             summary: str, importance: int = 3,
+                             metadata: dict | None = None) -> str:
+                """Demo."""
+                return next(ids)
+
+            store = instrument(memory_store, "memory_store", writer_factory=lambda: w)
+            store(project="p", area="hermes", module="turns", content="c", summary="s",
+                  importance=1, metadata={"kind": TRACE_KINDS[0]}, ctx=None)
+            store(project="p", area="a", module="m", content="c", summary="s", ctx=None)
+            store(project="p", area="a", module="m", content="c", summary="s",
+                  metadata={"kind": "session_summary"}, ctx=None)
+            w.flush()
+
+            from blueocean_mcp.telemetry import db
+            conn = db.connect(str(Path(d) / "t.db"))
+            seeded = {r[0] for r in conn.execute("SELECT point_id FROM entry_hits")}
+            conn.close()
+            assert "trace-point" not in seeded, f"a {TRACE_KINDS[0]} store was seeded: {seeded}"
+            assert {"plain-point", "other-kind-point"} <= seeded, seeded
         finally:
             w.stop()
     print("  OK")
@@ -738,6 +776,7 @@ def main() -> None:
     test_broken_pricing_does_not_break_the_tool()
     test_price_follows_the_running_provider_not_the_import_time_default()
     test_stored_entries_are_seeded_so_never_retrieved_is_knowable()
+    test_trace_kinds_are_not_seeded()
     test_bedrock_in_an_unpriced_region_costs_null_not_us_east_1()
     test_stdio_falls_back_to_a_per_process_session_id()
     test_client_info_is_recorded()
