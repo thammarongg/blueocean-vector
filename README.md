@@ -24,6 +24,7 @@ If you've ever burned through a context window, opened a different tool, and the
 - [How it fits together](#how-it-fits-together)
 - [Getting started](#getting-started)
   - [Teaching agents to actually use it](#teaching-agents-to-actually-use-it)
+  - [Hermes: automatic recall](#hermes-automatic-recall)
   - [Alternative: stdio](#alternative-stdio-per-agent-local-process)
 - [The tools an agent gets](#the-tools-an-agent-gets)
 - [Configuration](#configuration)
@@ -150,6 +151,24 @@ Registering the server gets the tools *available*; it doesn't make an agent reac
 It's one canonical `SKILL.md`, symlinked into each tool's own skills directory — edit it once, every tool picks up the change. The repo carries a copy at `skills/blueocean-memory/SKILL.md`, and the installer seeds `~/.agents` from it on a machine that doesn't have it yet; an existing canonical file is never overwritten, so local edits survive.
 
 To update an installed skill from the repository, use `./scripts/update.sh` as described in [Updating an existing installation](#updating-an-existing-installation). It compares the files and backs up the installed skill before replacing it when different. Running the installer again does not update an existing skill.
+
+### Hermes: automatic recall
+
+Every other client only reads memory when the agent decides to call `memory_search`. [Hermes](https://github.com/NousResearch/hermes-agent) can do better: it calls its active *memory provider* itself, before and after every turn. `integrations/hermes/blueocean/` is that provider.
+
+- **Before each turn** it finds which project the conversation is about and injects the relevant entries. It takes the project from a name in your message, or from Hermes's working directory, and you can correct it with the `blueocean_set_project` tool. The default budget is 600 tokens, and an entry already injected in the same session is not injected again.
+- **After each turn** it stores a **Turn Trace** (`kind=hermes_turn`, `importance=1`, area `hermes`, module `turns`). Before storing, it strips recalled memory and redacts credentials (including `NAME_TOKEN=`/`*_SECRET`-style assignments, quoted JSON values, Bearer/`sk-`/AWS/GitHub/Slack tokens, PEM private keys and URL passwords — best-effort regex, so don't paste secrets you can't afford to have stored). Traces are excluded from every search that doesn't ask for `kind="hermes_turn"`, so they never compete with real entries.
+- Explicit writes still go through the `blueocean` MCP server entry. Keep it configured.
+
+```bash
+./scripts/install_hermes_plugin.sh      # symlink into ~/.hermes/plugins/blueocean
+hermes memory setup blueocean           # pick it as the memory provider
+# then restart the Hermes gateway
+```
+
+Settings (`hermes memory setup`, stored in `~/.hermes/blueocean.json`): `url`, `prefetch_max_tokens`, `ignore_projects` (globs never auto-detected; default skips test and probe projects), `sync_turns`. Old traces can be removed with `blueocean-admin prune <project> --kind hermes_turn --older-days 30`.
+
+If the server is down, recall quietly returns nothing. After one failure the provider pauses for 30 s instead of making every turn wait. A write the server did not confirm within its deadline is dropped rather than resent, so a Turn Trace is never stored twice. To roll back, set `memory.provider` back to empty.
 
 ### Alternative: stdio (per-agent local process)
 
@@ -290,7 +309,14 @@ uv run python -m tests.auth
 uv run python -m tests.mcp_e2e
 uv run python -m tests.backup   # real snapshot -> delete collection -> restore cycle
 uv run python -m tests.health   # /health diagnostics + the cloud-provider self-test TTL cache
+uv run python -m tests.trace_kinds            # trace kinds excluded by default; prune --kind
+uv run python -m tests.hermes_logic           # Hermes provider: pure logic
+uv run python -m tests.hermes_bridge          # Hermes provider: bridge vs a real server
+uv run python -m tests.hermes_contract        # Hermes provider loaded by Hermes itself (skips without Hermes)
+uv run python -m tests.install_hermes_plugin
 ```
+
+`tests.hermes_contract` runs on Hermes's own dependency venv (`~/.hermes/installs/*/environments/*/venv/bin/python`, override with `HERMES_PYTHON`), never imports `hermes_bootstrap`, and fails if it changes any file in the Hermes install.
 
 `tests/auth.py` specifically checks that unauthenticated and wrong-token requests get rejected (401) and that a correct token works via both the header and the `?token=` query-param path.
 
