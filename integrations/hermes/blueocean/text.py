@@ -20,26 +20,42 @@ import time
 TRACE_SIDE_LIMIT = 2000
 SUMMARY_SIDE_LIMIT = 150
 
-_FENCE_RE = re.compile(r"<\s*memory-context\s*>[\s\S]*?<\s*/\s*memory-context\s*>", re.IGNORECASE)
+_FENCE_OPEN_RE = re.compile(r"<\s*memory-context\s*>", re.IGNORECASE)
+_FENCE_CLOSE_RE = re.compile(r"<\s*/\s*memory-context\s*>", re.IGNORECASE)
 
-_UNCLOSED_FENCE_RE = re.compile(r"<\s*memory-context\s*>[\s\S]*$", re.IGNORECASE)
-
+# Every pattern below is anchored and bounded so that its work stays linear (or close to
+# it) on adversarial input: a run of identifier characters must not be rescanned from every
+# position.
 _START = r"(?<![A-Za-z0-9_])"
+_TOKEN_CHARS = r"[A-Za-z0-9._~+/=-]"
 _SECRET_PATTERNS = [
-    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
-    re.compile(_START + r"Bearer\s+(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{16,}", re.IGNORECASE),
+    # A PEM block; one with no END marker runs to the end of the text.
+    re.compile(
+        r"-----BEGIN [A-Z ]{0,30}PRIVATE KEY-----"
+        r"(?:[\s\S]*?-----END [A-Z ]{0,30}PRIVATE KEY-----|[\s\S]*$)"
+    ),
+    re.compile(
+        _START + r"Bearer\s{1,10}(?:(?=" + _TOKEN_CHARS + r"*\d)" + _TOKEN_CHARS + r"{8,}|"
+        + _TOKEN_CHARS + r"{20,})",
+        re.IGNORECASE,
+    ),
     re.compile(_START + r"sk-[A-Za-z0-9_-]{16,}"),
     re.compile(_START + r"AKIA[0-9A-Z]{16}(?![0-9A-Z])"),
     re.compile(_START + r"gh[pousr]_[A-Za-z0-9]{20,}"),
     re.compile(_START + r"github_pat_[A-Za-z0-9_]{20,}"),
     re.compile(_START + r"xox[abpr]-[A-Za-z0-9-]{10,}"),
 ]
-_URL_PASSWORD_RE = re.compile(_START + r"([a-z][a-z0-9+.-]*://[^\s:/@]+:)[^\s@/]+(@)", re.IGNORECASE)
-# The key may carry name prefixes/suffixes (GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY), so it needs
-# no left anchor. The value is a whole quoted string or a run of non-space characters.
+_URL_PASSWORD_RE = re.compile(
+    _START + r"([a-z][a-z0-9+.-]{0,30}://[^\s:/@]{1,100}:)[^\s@/]{1,256}(@)", re.IGNORECASE
+)
+# The key may carry name prefixes/suffixes (GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY). It starts
+# at the beginning of an identifier run, and the prefix and suffix are bounded. The value is
+# a whole quoted string or a run of non-space characters.
+_NAME = r"[A-Za-z0-9_.-]"
 _ASSIGNMENT_RE = re.compile(
-    r"([A-Za-z0-9_.-]*(?:password|passwd|pwd|token|secret|api[_-]?key|access[_-]?key|private[_-]?key)"
-    r"[A-Za-z0-9_.-]*[\"']?\s*[:=]\s*)"
+    r"((?<!" + _NAME + r")" + _NAME + r"{0,64}"
+    r"(?:password|passwd|pwd|token|secret|api[_-]?key|access[_-]?key|private[_-]?key)"
+    + _NAME + r"{0,64}[\"']?\s*[:=]\s*)"
     r"(\"(?:[^\"\\]|\\.)*\"|'[^']*'|\S+)",
     re.IGNORECASE,
 )
@@ -48,7 +64,21 @@ REDACTED = "[REDACTED]"
 
 
 def strip_memory_context(text: str | None) -> str:
-    return _UNCLOSED_FENCE_RE.sub("", _FENCE_RE.sub("", text or "")).strip()
+    """Drop every recalled-memory fence; an unclosed one runs to the end of the text."""
+    text = text or ""
+    kept: list[str] = []
+    pos = 0
+    while True:
+        opening = _FENCE_OPEN_RE.search(text, pos)
+        if opening is None:
+            kept.append(text[pos:])
+            break
+        kept.append(text[pos : opening.start()])
+        closing = _FENCE_CLOSE_RE.search(text, opening.end())
+        if closing is None:
+            break
+        pos = closing.end()
+    return "".join(kept).strip()
 
 
 def redact(text: str) -> str:
@@ -65,7 +95,9 @@ def clip(text: str, limit: int) -> str:
 
 
 def clean_turn_side(text: str | None, limit: int = TRACE_SIDE_LIMIT) -> str:
-    return clip(redact(strip_memory_context(text)), limit)
+    # Pre-clip so redaction's work is bounded however large the input; a secret cut at this
+    # boundary lies beyond the final window anyway.
+    return clip(redact(strip_memory_context(text)[: 4 * limit]), limit)
 
 
 def trace_content(user: str, assistant: str) -> str:

@@ -11,6 +11,7 @@ Run with:
 import calendar
 import json
 import tempfile
+import time
 from pathlib import Path
 
 from ._hermes import load_plugin_module
@@ -113,6 +114,45 @@ def test_redaction_gaps() -> None:
     print("  OK")
 
 
+def test_bounded_work() -> None:
+    print("== text: adversarial input stays fast; Bearer and PEM edge cases ==")
+    adversarial = {
+        "a*": "a" * 20000,
+        "-*": "-" * 20000,
+        "a-": "a-" * 10000,
+        "a.": "a." * 10000,
+        "token": "token" * 4000,
+        "password": "password" * 2500,
+        "x://": "x://" + "a" * 19996,
+        "a-a://": "a-a://" * 3333,
+        "fence": "<memory-context>" * 1250,
+        "pem": "-----BEGIN RSA PRIVATE KEY-----\n" + "A" * 19968,
+        "quote": 'password="' + "a" * 19990,
+        "bearer": "Bearer " + "a" * 19993,
+    }
+    worst = 0.0
+    for name, raw in adversarial.items():
+        for fn in (text.redact, text.strip_memory_context, text.clean_turn_side):
+            start = time.perf_counter()
+            fn(raw)
+            took = time.perf_counter() - start
+            worst = max(worst, took)
+            assert took < 0.25, f"{fn.__name__} took {took:.2f}s on {name!r}"
+    print(f"  slowest call: {worst:.3f}s")
+
+    start = time.perf_counter()
+    assert len(text.clean_turn_side("word " * 10000)) <= text.TRACE_SIDE_LIMIT
+    assert time.perf_counter() - start < 0.25
+
+    assert "abcdefgh12345" not in text.redact("token: Bearer abcdefgh12345")
+    prose = "use Bearer authentication scheme here"
+    assert text.redact(prose) == prose
+
+    out = text.redact("-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg\nkqhkiG9w0B")
+    assert "MIIEvQIBADANBg" not in out and "kqhkiG9w0B" not in out
+    print("  OK")
+
+
 def test_turn_cleaning() -> None:
     print("== text: turn sides cleaned, clipped, summarised ==")
     long_side = "x" * 5000
@@ -161,6 +201,7 @@ def main() -> None:
     test_config()
     test_fence_and_redaction()
     test_redaction_gaps()
+    test_bounded_work()
     test_turn_cleaning()
     test_unseen_and_format()
     print("\nHERMES LOGIC TEST PASSED")
