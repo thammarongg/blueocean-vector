@@ -5,13 +5,17 @@ keeps a session alive across calls. These tests pin what a person chatting
 with Hermes would notice: recall works with the right token, a wrong token or
 a stopped server costs one quick failure rather than a five-second wait every
 turn, writes survive a short outage, and a server restart (docker rebuild)
-does not break the session until Hermes restarts.
+does not break the session until Hermes restarts. Two callers that hit the
+same dead session reconnect once, without tearing down each other's session.
 
 Run with:
     uv run python -m tests.hermes_bridge
 """
 
+import asyncio
+import concurrent.futures
 import time
+from types import SimpleNamespace
 
 from ._helpers import reset_project
 from ._hermes import load_plugin_module, start_server, stop_server
@@ -134,6 +138,155 @@ def test_restart_reconnects() -> None:
     print("  OK")
 
 
+def test_stalled_session_leaves_room_to_reconnect() -> None:
+    print("== a session that stops answering leaves time for the reconnect ==")
+
+    class Stalled:
+        async def call_tool(self, tool, args):
+            await asyncio.sleep(3600)
+
+    class Fresh:
+        async def call_tool(self, tool, args):
+            return SimpleNamespace(content=[SimpleNamespace(text='{"ok": true}')],
+                                   is_error=False)
+
+    sessions = [Stalled(), Fresh()]
+
+    class Scripted(bridge.Bridge):
+        async def _ensure_session(self):
+            return sessions.pop(0)
+
+    b = Scripted("http://127.0.0.1:9/mcp", TOKEN, call_timeout=2.0)
+    started = time.monotonic()
+    assert b.call("memory_list_projects", {}) == {"ok": True}, "the retry never ran"
+    assert time.monotonic() - started < 2.0
+    print("  OK")
+
+
+def test_retired_owner_never_publishes(proc_url: str) -> None:
+    print("== a session that finishes connecting after it was given up on closes itself ==")
+    real = bridge.ClientSession
+    gate = asyncio.Event()
+    slow_owners: list = []
+
+    class SlowFirstInit(real):
+        async def initialize(self):
+            if not slow_owners:
+                slow_owners.append(asyncio.current_task())
+                await gate.wait()
+            return await super().initialize()
+
+    bridge.ClientSession = SlowFirstInit
+    try:
+        # The caller gives up while the first session is still connecting; a
+        # later call connects a second one. The first must not replace it.
+        b = bridge.Bridge(proc_url, TOKEN, cooldown=0.2)
+        try:
+            b.call("memory_list_projects", {}, timeout=0.3)
+        except bridge.BridgeUnavailable:
+            pass
+        else:
+            raise AssertionError("the first call should have timed out")
+        time.sleep(0.3)
+        assert b.call("memory_list_projects", {})["projects"] is not None
+        current = b._session
+        b._loop.call_soon_threadsafe(gate.set)
+        _wait_until(slow_owners[0].done, 5.0, "the late session lingered")
+        assert b._session is current, "a late session replaced the current one"
+        assert b.call("memory_list_projects", {})["projects"] is not None
+
+        # An attempt that times out while connecting retires that half-open
+        # session rather than leaving it to linger.
+        slow_owners.clear()
+        gate.clear()
+        b = bridge.Bridge(proc_url, TOKEN, call_timeout=1.0)
+        assert b.call("memory_list_projects", {}, timeout=5.0)["projects"] is not None
+        _wait_until(slow_owners[0].done, 2.0, "a half-open session was left behind")
+    finally:
+        bridge.ClientSession = real
+        b._loop.call_soon_threadsafe(gate.set)  # never leave a gated session waiting
+    print("  OK")
+
+
+def _wait_until(predicate, timeout: float, message: str) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError(message)
+        time.sleep(0.02)
+
+
+def test_concurrent_callers_share_a_reconnect() -> None:
+    print("== two callers on a dead session reconnect without tearing each other down ==")
+    both_on_old = asyncio.Event()
+    new_in_flight = asyncio.Event()
+    late_reset_done = asyncio.Event()
+    resets: list = []
+
+    class Ordered(bridge.Bridge):
+        """Forces the losing order: the second caller's failure on the old
+        session is handled only after the first caller is mid-call on the new
+        session."""
+
+        old = None
+        gated_new = False
+
+        async def _reset_session(self, *args):
+            resets.append(args)
+            if len(resets) == 2:
+                await new_in_flight.wait()
+                await super()._reset_session(*args)
+                late_reset_done.set()
+            else:
+                await super()._reset_session(*args)
+
+        async def _ensure_session(self):
+            session = await super()._ensure_session()
+            if self.old is not None and session is not self.old and not self.gated_new:
+                self.gated_new = True
+                real_call = session.call_tool
+
+                async def first_call_waits(*a, **k):
+                    session.call_tool = real_call
+                    new_in_flight.set()
+                    await late_reset_done.wait()
+                    return await real_call(*a, **k)
+
+                session.call_tool = first_call_waits
+            return session
+
+    proc = start_server(PORT, TOKEN)
+    try:
+        b = Ordered(URL, TOKEN)
+        assert b.call("memory_list_projects", {})["projects"] is not None
+        old = b._session
+        arrived: list = []
+        real_old_call = old.call_tool
+
+        async def wait_for_both(*a, **k):
+            arrived.append(1)
+            if len(arrived) == 2:
+                both_on_old.set()
+            await both_on_old.wait()
+            return await real_old_call(*a, **k)
+
+        old.call_tool = wait_for_both
+        b.old = old
+    finally:
+        stop_server(proc)
+    proc = start_server(PORT, TOKEN)
+    try:
+        with concurrent.futures.ThreadPoolExecutor(2) as pool:
+            calls = [pool.submit(b.call, "memory_list_projects", {}) for _ in range(2)]
+            for done in calls:
+                assert done.result()["projects"] is not None
+        assert len(resets) == 2, resets
+        assert b.call("memory_list_projects", {})["projects"] is not None, "breaker opened"
+    finally:
+        stop_server(proc)
+    print("  OK")
+
+
 def test_writes_survive_outage() -> None:
     print("== writes queued while the server is down are delivered when it is back ==")
     b = bridge.Bridge(URL, TOKEN, cooldown=1.0)
@@ -157,15 +310,18 @@ def test_writes_survive_outage() -> None:
 def main() -> None:
     reset_project(PROJECT)
     test_breaker_unit()
+    test_stalled_session_leaves_room_to_reconnect()
     proc = start_server(PORT, TOKEN)
     try:
         test_round_trip(URL)
         test_tool_error_is_not_an_outage(URL)
         test_wrong_token(URL)
+        test_retired_owner_never_publishes(URL)
     finally:
         stop_server(proc)
     test_dead_server()
     test_restart_reconnects()
+    test_concurrent_callers_share_a_reconnect()
     test_writes_survive_outage()
     print("\nHERMES BRIDGE TEST PASSED")
 

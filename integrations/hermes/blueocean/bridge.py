@@ -137,6 +137,7 @@ class Bridge:
         self._session: ClientSession | None = None
         self._owner: asyncio.Task | None = None
         self._closing: asyncio.Event | None = None
+        self._tasks: set[asyncio.Task] = set()  # retired owners still closing, the writer
         self._dropping = False
 
     # -- sync surface ------------------------------------------------------
@@ -185,7 +186,7 @@ class Bridge:
                 asyncio.set_event_loop(loop)
                 self._queue = asyncio.Queue(maxsize=self._queue_size)
                 self._connect_lock = asyncio.Lock()
-                loop.create_task(self._writer())
+                self._keep(loop.create_task(self._writer()))
                 loop.call_soon(ready.set)
                 loop.run_forever()
 
@@ -195,15 +196,23 @@ class Bridge:
             self._loop = loop
             return loop
 
+    def _keep(self, task: asyncio.Task) -> asyncio.Task:
+        """Hold a strong reference until the task ends; the loop holds only weak ones."""
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
+
     async def _call_with_retry(self, tool: str, args: dict) -> Any:
         last: BaseException | None = None
+        attempt_timeout = self._call_timeout / 2  # two attempts fit in call()'s deadline
         for _ in range(2):  # the second attempt runs on a fresh session
+            session: ClientSession | None = None
             try:
-                session = await asyncio.wait_for(self._ensure_session(), self._call_timeout)
-                result = await asyncio.wait_for(session.call_tool(tool, args), self._call_timeout)
+                session = await asyncio.wait_for(self._ensure_session(), attempt_timeout)
+                result = await asyncio.wait_for(session.call_tool(tool, args), attempt_timeout)
             except Exception as exc:  # noqa: BLE001 - any failure: reconnect once, then describe()
                 last = exc
-                await self._reset_session()
+                await self._reset_session(session)
                 continue
             if self._breaker.success():
                 logger.info("BlueOcean reachable again at %s", self._url)
@@ -220,7 +229,7 @@ class Bridge:
                 return self._session
             ready: asyncio.Future = asyncio.get_running_loop().create_future()
             self._closing = asyncio.Event()
-            self._owner = asyncio.create_task(self._own_session(ready, self._closing))
+            self._owner = self._keep(asyncio.create_task(self._own_session(ready, self._closing)))
             return await ready
 
     async def _own_session(self, ready: asyncio.Future, closing: asyncio.Event) -> None:
@@ -235,6 +244,14 @@ class Bridge:
                     streamable_http_client(self._url, http_client=client))
                 mine = await stack.enter_async_context(ClientSession(streams[0], streams[1]))
                 await mine.initialize()
+                if closing.is_set() or self._owner is not asyncio.current_task():
+                    # Retired while connecting: its caller gave up, or a newer
+                    # owner took over. Close (leave the stack) rather than
+                    # replace the current session or linger.
+                    if not ready.done():
+                        ready.set_exception(
+                            BridgeUnavailable("BlueOcean session was retired while connecting"))
+                    return
                 self._session = mine
                 if not ready.done():
                     ready.set_result(mine)
@@ -252,15 +269,34 @@ class Bridge:
             if self._session is mine:
                 self._session = None
 
-    async def _reset_session(self) -> None:
+    async def _reset_session(self, failed: ClientSession | None) -> None:
+        """Retire ``failed``, the session the failing attempt called on, unless
+        another caller has already replaced it: tearing down the replacement
+        would break that caller's in-flight call.
+
+        ``failed`` is None when the attempt failed while obtaining a session.
+        Then an owner still connecting is cancelled, since it only checks
+        ``closing`` once connected. This runs straight after the failing
+        attempt released the connect lock, with no await in between, so the
+        owner it retires is the one that attempt was waiting for. If the lock
+        is held, another caller is still waiting on that owner and its own
+        attempt decides; cancelling would hand it a CancelledError.
+
+        Retired owners close in the background (``_keep`` holds them), so the
+        retry is not delayed by a slow close.
+        """
+        if failed is not self._session:
+            return
+        if failed is None and self._connect_lock is not None and self._connect_lock.locked():
+            return
         owner, closing = self._owner, self._closing
         self._session = None
         self._owner = None
         self._closing = None
         if closing is not None:
             closing.set()
-        if owner is not None:
-            await asyncio.wait({owner}, timeout=2)
+        if failed is None and owner is not None:
+            owner.cancel()
 
     def _enqueue(self, tool: str, args: dict) -> None:
         assert self._queue is not None
