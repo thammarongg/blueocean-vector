@@ -130,6 +130,25 @@ def test_bounded_work() -> None:
         "pem": "-----BEGIN RSA PRIVATE KEY-----\n" + "A" * 19968,
         "quote": 'password="' + "a" * 19990,
         "bearer": "Bearer " + "a" * 19993,
+        "stripe": "sk_live_" + "a" * 19992,
+        "aiza": "AIza" * 5000,
+        "asia": "ASIA" * 5000,
+        "hf_": "hf_" * 6666,
+        "glpat": "glpat-" * 3333,
+        "npm_": "npm_" * 5000,
+        "xapp": "xapp-" * 4000,
+        "basic": "Authorization: Basic " + "a" * 19979,
+        "basic*": "Authorization: Basic " * 952,
+        "_key": "_key=" * 4000,
+        "a_key": "a_key" * 4000,
+        "passphrase": "passphrase:" * 1818,
+        "credentials": "credentials " * 1666,
+        "url no @": "x://u:" + "a" * 19994,
+        "url a@": "x://u:" + "a@" * 9997,
+        "url many": "a://b:" * 3333,
+        "url slashes": "x://u:" + "/" * 19994,
+        "pgp": "-----BEGIN PGP PRIVATE KEY BLOCK-----\n" + "A" * 19962,
+        "pgp*": "-----BEGIN PGP PRIVATE KEY BLOCK" * 625,
     }
     worst = 0.0
     for name, raw in adversarial.items():
@@ -151,6 +170,95 @@ def test_bounded_work() -> None:
 
     out = text.redact("-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBg\nkqhkiG9w0B")
     assert "MIIEvQIBADANBg" not in out and "kqhkiG9w0B" not in out
+    print("  OK")
+
+
+def test_redaction_formats() -> None:
+    print("== text: Stripe, Google, ASIA, hf/glpat/npm/xapp, PGP, Basic, *_KEY=, URL passwords ==")
+    stripe = "sk_" "live_51HxYzAbCdEfGhIjKlMnOpQrStUv"
+    google = "AIzaSyD-9tSrke72PouQMnMX-a7eZSW0jkFMBWY"
+    leaks = {
+        f"here is my key {stripe}": "51HxYzAbCdEfGhIjKlMnOpQrStUv",
+        "restricted rk_" "test_51HxYzAbCdEfGhIjKlMnOp ok": "51HxYzAbCdEfGhIjKlMnOp",
+        f"STRIPE_KEY={stripe}": "51HxYzAbCdEfGhIjKlMnOpQrStUv",
+        f"use {google}": google,
+        "https://maps.googleapis.com/api?key=AIzaSyD-9tSrke72PouQMnMX": "AIzaSyD",
+        "temp creds ASIAIOSFODNN7EXAMPLE ok": "ASIAIOSFODNN7EXAMPLE",
+        "token is hf_AbCdEfGhIjKlMnOpQrStUvWxYz123456": "hf_AbCdEfGhIjKlMnOpQrStUvWxYz123456",
+        "glpat-xxxxxxxxxxxxxxxxxxxx1 works": "glpat-xxxxxxxxxxxxxxxxxxxx1",
+        "npm_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789": "npm_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789",
+        "xapp-1-A0123456789-0123456789012-abcdef0123456789": "abcdef0123456789",
+        "-----BEGIN PGP PRIVATE KEY BLOCK-----\nlQOYBF0AbCdEfGh\n"
+        "-----END PGP PRIVATE KEY BLOCK-----": "lQOYBF0AbCdEfGh",
+        'curl -H "Authorization: Basic dXNlcjpodW50ZXIyMjIy" https://x': "dXNlcjpodW50ZXIyMjIy",
+        "ENCRYPTION_KEY=9f8e7d6c5b4a39281706f5e4d3c2b1a0": "9f8e7d6c5b4a39281706f5e4d3c2b1a0",
+        "signing-key: 9f8e7d6c5b4a": "9f8e7d6c5b4a",
+        "CREDENTIALS=abc123secretvalue": "abc123secretvalue",
+        "credential = abc123secretvalue": "abc123secretvalue",
+        "passphrase: correct horse battery": "correct",
+        "postgres://app:ab/cd+ef@db.local/x": "ab/cd+ef",
+        "DATABASE_URL=postgres://app:ab/cd@db/x": "ab/cd",
+        "postgres://app:p@ss@db.local/x": "p@ss",
+        # Thai letters directly before a token: no \b boundary there.
+        f"คีย์คือ{stripe}": "51HxYzAbCdEfGhIjKlMnOpQrStUv",
+        "โทเคนhf_AbCdEfGhIjKlMnOpQrStUvWxYz123456นะ": "AbCdEfGhIjKlMnOpQrStUvWxYz123456",
+    }
+    for raw, secret in leaks.items():
+        out = text.clean_turn_side(raw)
+        assert secret not in out, f"secret survived redaction: {raw!r} -> {out!r}"
+        assert "[REDACTED]" in out, out
+    assert (text.redact("postgres://app:ab/cd+ef@db.local/x")
+            == "postgres://app:[REDACTED]@db.local/x")
+    # The password runs to the last `@`, so one holding a raw `@` is dropped whole.
+    assert text.redact("postgres://app:p@ss@db.local/x") == "postgres://app:[REDACTED]@db.local/x"
+
+    # A key name only counts in an assignment (`:` or `=`), so prose is left alone.
+    prose = [
+        "the monkey key is under the mat",
+        "we keep the primary key and the foreign key in the credentials table",
+        "the passphrase is written down somewhere safe",
+        "Basic authentication works fine behind the proxy",
+        "my-keyboard: a mechanical one",
+        "see https://example.com/docs/a@b for details",
+        "visit https://example.com:8080/docs today",
+    ]
+    for line in prose:
+        assert text.redact(line) == line, f"ordinary prose was redacted: {line!r} -> {text.redact(line)!r}"
+    print("  OK")
+
+
+def test_straddling_secret_is_not_cut() -> None:
+    print("== text: a secret straddling the pre-clip is dropped, not half-kept ==")
+    limit = text.TRACE_SIDE_LIMIT
+    key = "sk-proj-SECRETabcdefghijklmnop0123456789"
+    fillers = {
+        "assignment": "token=" + "A" * 7000 + "\n",
+        "two PEM blocks": ("-----BEGIN RSA PRIVATE KEY-----\n" + "M" * 3300
+                           + "\n-----END RSA PRIVATE KEY-----\n") * 2,
+    }
+    for name, filler in fillers.items():
+        pad = 4 * limit - len(filler) - 12  # the key starts 12 chars before the cut
+        raw = filler + "x" * (pad - 1) + " " + key + " tail"
+        out = text.clean_turn_side(raw)
+        assert key[:12] not in out, f"{name}: a cut secret leaked: {out[-60:]!r}"
+        assert len(out) <= limit
+    raw = ("token=" + "A" * 7000 + "\n" + "y" * (4 * limit - 7007 - 25)
+           + " postgres://app:Sup3rS3cretPassw0rd@db/x")
+    out = text.clean_turn_side(raw)
+    assert "Sup3rS3cr" not in out, f"a cut URL password leaked: {out[-60:]!r}"
+
+    # No whitespace at all: fall back to the fixed cut, still bounded.
+    assert len(text.clean_turn_side("z" * 50000)) <= limit
+    print("  OK")
+
+
+def test_query_is_redacted() -> None:
+    print("== text: the recall query is redacted and clipped ==")
+    query = text.clean_query("which cache? password=hunter2secret and sk-proj-ABCDEFGHIJKLMNOPQRST",
+                             1000)
+    assert "hunter2secret" not in query and "ABCDEFGHIJKLMNOPQRST" not in query, query
+    assert query.startswith("which cache?")
+    assert len(text.clean_query("word " * 100000, 1000)) <= 1000
     print("  OK")
 
 
@@ -281,6 +389,9 @@ def main() -> None:
     test_config()
     test_fence_and_redaction()
     test_redaction_gaps()
+    test_redaction_formats()
+    test_straddling_secret_is_not_cut()
+    test_query_is_redacted()
     test_bounded_work()
     test_turn_cleaning()
     test_unseen_and_format()

@@ -29,33 +29,48 @@ _FENCE_CLOSE_RE = re.compile(r"<\s*/\s*memory-context\s*>", re.IGNORECASE)
 _START = r"(?<![A-Za-z0-9_])"
 _TOKEN_CHARS = r"[A-Za-z0-9._~+/=-]"
 _SECRET_PATTERNS = [
-    # A PEM block; one with no END marker runs to the end of the text.
+    # A PEM or PGP block; one with no END marker runs to the end of the text.
     re.compile(
-        r"-----BEGIN [A-Z ]{0,30}PRIVATE KEY-----"
-        r"(?:[\s\S]*?-----END [A-Z ]{0,30}PRIVATE KEY-----|[\s\S]*$)"
+        r"-----BEGIN [A-Z ]{0,30}PRIVATE KEY(?: BLOCK)?-----"
+        r"(?:[\s\S]*?-----END [A-Z ]{0,30}PRIVATE KEY(?: BLOCK)?-----|[\s\S]*$)"
     ),
     re.compile(
         _START + r"Bearer\s{1,10}(?:(?=" + _TOKEN_CHARS + r"*\d)" + _TOKEN_CHARS + r"{8,}|"
         + _TOKEN_CHARS + r"{20,})",
         re.IGNORECASE,
     ),
+    # Basic only after an Authorization header name: "Basic authentication" is prose.
+    re.compile(
+        r"(?<![A-Za-z0-9_-])(Authorization[\"']?\s{0,10}:\s{0,10}[\"']?)Basic\s{1,10}"
+        r"[A-Za-z0-9+/=_-]{4,}",
+        re.IGNORECASE,
+    ),
     re.compile(_START + r"sk-[A-Za-z0-9_-]{16,}"),
-    re.compile(_START + r"AKIA[0-9A-Z]{16}(?![0-9A-Z])"),
+    re.compile(_START + r"[sr]k_(?:live|test)_[A-Za-z0-9]{10,}"),  # Stripe
+    re.compile(_START + r"AIza[0-9A-Za-z_-]{20,}"),  # Google API key
+    re.compile(_START + r"A[SK]IA[0-9A-Z]{16}(?![0-9A-Z])"),  # AWS, long-lived and temporary
     re.compile(_START + r"gh[pousr]_[A-Za-z0-9]{20,}"),
     re.compile(_START + r"github_pat_[A-Za-z0-9_]{20,}"),
-    re.compile(_START + r"xox[abpr]-[A-Za-z0-9-]{10,}"),
+    re.compile(_START + r"glpat-[A-Za-z0-9_-]{20,}"),  # GitLab
+    re.compile(_START + r"hf_[A-Za-z0-9]{20,}"),  # Hugging Face
+    re.compile(_START + r"npm_[A-Za-z0-9]{20,}"),
+    re.compile(_START + r"(?:xox[abpr]|xapp)-[A-Za-z0-9-]{10,}"),  # Slack
 ]
+# The password runs to the last `@` before whitespace, so one holding `/`, `+` or a raw
+# `@` is dropped whole. The run is bounded, so each scheme costs at most ~2x256 steps.
 _URL_PASSWORD_RE = re.compile(
-    _START + r"([a-z][a-z0-9+.-]{0,30}://[^\s:/@]{1,100}:)[^\s@/]{1,256}(@)", re.IGNORECASE
+    _START + r"([a-z][a-z0-9+.-]{0,30}://[^\s:/@]{1,100}:)\S{1,256}(@)", re.IGNORECASE
 )
 # The key may carry name prefixes/suffixes (GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY). It starts
-# at the beginning of an identifier run, and the prefix and suffix are bounded. The value is
-# a whole quoted string or a run of non-space characters.
+# at the beginning of an identifier run, and the prefix and suffix are bounded. A name that
+# merely ends in `_key`/`-key` (STRIPE_KEY, signing-key) counts too. The value is a whole
+# quoted string or a run of non-space characters.
 _NAME = r"[A-Za-z0-9_.-]"
 _ASSIGNMENT_RE = re.compile(
     r"((?<!" + _NAME + r")" + _NAME + r"{0,64}"
-    r"(?:password|passwd|pwd|token|secret|api[_-]?key|access[_-]?key|private[_-]?key)"
-    + _NAME + r"{0,64}[\"']?\s*[:=]\s*)"
+    r"(?:(?:password|passwd|pwd|token|secret|api[_-]?key|access[_-]?key|private[_-]?key"
+    r"|credentials?|passphrase)" + _NAME + r"{0,64}|[_-]key)"
+    r"[\"']?\s*[:=]\s*)"
     r"(\"(?:[^\"\\]|\\.)*\"|'[^']*'|\S+)",
     re.IGNORECASE,
 )
@@ -81,9 +96,14 @@ def strip_memory_context(text: str | None) -> str:
     return "".join(kept).strip()
 
 
+def _redact_match(match: re.Match) -> str:
+    # A pattern that captures a header name keeps it; the rest go whole.
+    return (match.group(1) if match.re.groups else "") + REDACTED
+
+
 def redact(text: str) -> str:
     for pattern in _SECRET_PATTERNS:
-        text = pattern.sub(REDACTED, text)
+        text = pattern.sub(_redact_match, text)
     text = _URL_PASSWORD_RE.sub(lambda m: f"{m.group(1)}{REDACTED}{m.group(2)}", text)
     return _ASSIGNMENT_RE.sub(lambda m: f"{m.group(1)}{REDACTED}", text)
 
@@ -94,10 +114,31 @@ def clip(text: str, limit: int) -> str:
     return text[: limit - 1].rstrip() + "…"
 
 
+def _bounded_cut(text: str, limit: int) -> str:
+    """At most 4 x limit characters, so redaction's work is bounded however large the input.
+
+    The cut falls on the last whitespace in [limit, 4 x limit] rather than at a fixed
+    index: redaction can shrink the kept text by thousands of characters, which would pull
+    a credential cut in half at the boundary into the final window, too short for any
+    pattern to recognise. Text with no whitespace there is cut at 4 x limit.
+    """
+    hard = 4 * limit
+    if len(text) <= hard:
+        return text
+    for i in range(hard, limit - 1, -1):
+        if text[i].isspace():
+            return text[:i]
+    return text[:hard]
+
+
 def clean_turn_side(text: str | None, limit: int = TRACE_SIDE_LIMIT) -> str:
-    # Pre-clip so redaction's work is bounded however large the input; a secret cut at this
-    # boundary lies beyond the final window anyway.
-    return clip(redact(strip_memory_context(text)[: 4 * limit]), limit)
+    return clip(redact(_bounded_cut(strip_memory_context(text), limit)), limit)
+
+
+def clean_query(text: str | None, limit: int) -> str:
+    """A recall query with credentials removed: with a remote embedding provider the query
+    leaves the machine."""
+    return redact(_bounded_cut(text or "", limit))[:limit]
 
 
 def trace_content(user: str, assistant: str) -> str:
