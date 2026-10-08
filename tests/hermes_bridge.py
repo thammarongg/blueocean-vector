@@ -166,45 +166,129 @@ def test_stalled_session_leaves_room_to_reconnect() -> None:
 def test_retired_owner_never_publishes(proc_url: str) -> None:
     print("== a session that finishes connecting after it was given up on closes itself ==")
     real = bridge.ClientSession
-    gate = asyncio.Event()
+    # One Event per bridge: an asyncio.Event binds to the loop that first
+    # awaits it, and each Bridge runs its own loop.
+    gates = [asyncio.Event()]
+    gated = [0]  # how many of the next sessions wait on the gate in initialize()
     slow_owners: list = []
 
-    class SlowFirstInit(real):
+    class SlowInit(real):
         async def initialize(self):
-            if not slow_owners:
+            if len(slow_owners) < gated[0]:
                 slow_owners.append(asyncio.current_task())
-                await gate.wait()
+                await gates[-1].wait()
             return await super().initialize()
 
-    bridge.ClientSession = SlowFirstInit
+    class SlowRetry(bridge.Bridge):
+        """Delays the retry so the caller's deadline passes while the second
+        attempt is still connecting, which leaves that session half-open."""
+
+        async def _reset_session(self, *args):
+            await asyncio.sleep(0.2)
+            await super()._reset_session(*args)
+
+    bridge.ClientSession = SlowInit
     try:
-        # The caller gives up while the first session is still connecting; a
-        # later call connects a second one. The first must not replace it.
-        b = bridge.Bridge(proc_url, TOKEN, cooldown=0.2)
+        # The caller gives up while its second session is still connecting; a
+        # later call connects a third. The second must not replace it.
+        gated[0] = 2
+        b = SlowRetry(proc_url, TOKEN, cooldown=0.2)
         try:
-            b.call("memory_list_projects", {}, timeout=0.3)
+            b.call("memory_list_projects", {}, timeout=0.6)
         except bridge.BridgeUnavailable:
             pass
         else:
             raise AssertionError("the first call should have timed out")
+        assert len(slow_owners) == 2 and not slow_owners[1].done(), slow_owners
         time.sleep(0.3)
         assert b.call("memory_list_projects", {})["projects"] is not None
         current = b._session
-        b._loop.call_soon_threadsafe(gate.set)
-        _wait_until(slow_owners[0].done, 5.0, "the late session lingered")
+        b._loop.call_soon_threadsafe(gates[-1].set)
+        _wait_until(slow_owners[1].done, 5.0, "the late session lingered")
         assert b._session is current, "a late session replaced the current one"
         assert b.call("memory_list_projects", {})["projects"] is not None
 
         # An attempt that times out while connecting retires that half-open
-        # session rather than leaving it to linger.
+        # session (cancels it) rather than leaving it to linger.
         slow_owners.clear()
-        gate.clear()
-        b = bridge.Bridge(proc_url, TOKEN, call_timeout=1.0)
-        assert b.call("memory_list_projects", {}, timeout=5.0)["projects"] is not None
+        gated[0] = 1
+        gates.append(asyncio.Event())
+        b = bridge.Bridge(proc_url, TOKEN)
+        started = time.monotonic()
+        assert b.call("memory_list_projects", {}, timeout=2.0)["projects"] is not None
+        assert time.monotonic() - started >= 1.0, "the first attempt never waited on the gate"
         _wait_until(slow_owners[0].done, 2.0, "a half-open session was left behind")
+        assert slow_owners[0].cancelled(), "the half-open session was not cancelled"
     finally:
         bridge.ClientSession = real
-        b._loop.call_soon_threadsafe(gate.set)  # never leave a gated session waiting
+        b._loop.call_soon_threadsafe(gates[-1].set)  # never leave a gated session waiting
+    print("  OK")
+
+
+def test_caller_deadline_retires_a_stalled_session(proc_url: str) -> None:
+    print("== a session that stops answering is replaced within the caller's own deadline ==")
+    b = bridge.Bridge(proc_url, TOKEN, cooldown=0.5)  # call_timeout stays 5s
+    assert b.call("memory_list_projects", {})["projects"] is not None
+    stalled = b._session
+
+    async def hang(*a, **k):
+        await asyncio.sleep(3600)
+
+    stalled.call_tool = hang
+    started = time.monotonic()
+    try:
+        b.call("memory_list_projects", {}, timeout=2.0)
+    except bridge.BridgeUnavailable:
+        time.sleep(0.6)  # let the breaker close before checking what is left
+    assert time.monotonic() - started < 2.0 + 0.6 + 0.3, "call() overran its deadline"
+    assert b.call("memory_list_projects", {}, timeout=2.0)["projects"] is not None, \
+        "the stalled session was reused"
+    assert b._session is not stalled
+    print("  OK")
+
+
+def test_timed_out_write_is_not_replayed() -> None:
+    print("== a write that may have landed is sent once; one that never left is retried ==")
+    attempts: list = []
+
+    class Hangs:
+        async def call_tool(self, tool, args):
+            attempts.append(("hangs", tool))
+            await asyncio.sleep(3600)
+
+    class Stores:
+        async def call_tool(self, tool, args):
+            attempts.append(("stores", tool))
+            return SimpleNamespace(content=[SimpleNamespace(text='"point-id"')],
+                                   is_error=False)
+
+    script: list = []
+
+    class Scripted(bridge.Bridge):
+        async def _ensure_session(self):
+            step = script.pop(0) if script else Stores()
+            if isinstance(step, Exception):
+                raise step
+            return step
+
+    args = {"project": PROJECT, "area": "hermes", "module": "turns", "content": "c",
+            "summary": "s", "metadata": {"kind": "hermes_turn"}}
+
+    # call_tool timed out: the server may have stored it, so it is not sent again.
+    script[:] = [Hangs()]
+    b = Scripted("http://127.0.0.1:9/mcp", TOKEN, call_timeout=0.4, cooldown=0.1)
+    b.submit("memory_store", args)
+    assert b.drain(3.0), "a timed-out write was retried"
+    time.sleep(0.3)
+    assert attempts == [("hangs", "memory_store")], attempts
+
+    # Failing to get a session means nothing was sent: that write is retried.
+    attempts.clear()
+    script[:] = [ConnectionRefusedError(), ConnectionRefusedError()]
+    b = Scripted("http://127.0.0.1:9/mcp", TOKEN, call_timeout=0.4, cooldown=0.1)
+    b.submit("memory_store", args)
+    assert b.drain(3.0), "the write was never delivered"
+    assert attempts == [("stores", "memory_store")], attempts
     print("  OK")
 
 
@@ -311,12 +395,14 @@ def main() -> None:
     reset_project(PROJECT)
     test_breaker_unit()
     test_stalled_session_leaves_room_to_reconnect()
+    test_timed_out_write_is_not_replayed()
     proc = start_server(PORT, TOKEN)
     try:
         test_round_trip(URL)
         test_tool_error_is_not_an_outage(URL)
         test_wrong_token(URL)
         test_retired_owner_never_publishes(URL)
+        test_caller_deadline_retires_a_stalled_session(URL)
     finally:
         stop_server(proc)
     test_dead_server()

@@ -48,6 +48,10 @@ class ToolCallError(BridgeUnavailable):
     """The server answered but the tool reported an error. Not an outage."""
 
 
+class _Unconfirmed(BridgeUnavailable):
+    """A write's call_tool timed out. It may have landed, so it is not resent."""
+
+
 class Breaker:
     """Skip calls for ``cooldown`` seconds after a failure.
 
@@ -147,7 +151,8 @@ class Bridge:
             raise BridgeUnavailable("BlueOcean paused after a recent failure")
         wait = self._call_timeout if timeout is None else timeout
         loop = self._ensure_loop()
-        future = asyncio.run_coroutine_threadsafe(self._call_with_retry(tool, args), loop)
+        future = asyncio.run_coroutine_threadsafe(
+            self._call_with_retry(tool, args, wait / 2), loop)
         try:
             return future.result(timeout=wait)
         except concurrent.futures.TimeoutError:
@@ -202,9 +207,18 @@ class Bridge:
         task.add_done_callback(self._tasks.discard)
         return task
 
-    async def _call_with_retry(self, tool: str, args: dict) -> Any:
+    async def _call_with_retry(self, tool: str, args: dict, attempt_timeout: float, *,
+                               replay_timeouts: bool = True) -> Any:
+        """Up to two attempts of ``attempt_timeout`` each, the second on a fresh
+        session. Callers pass half their deadline, so a stalled session is
+        retired before the caller gives up.
+
+        With ``replay_timeouts`` False (writes), a call_tool that timed out is
+        not sent again, since the server may have stored it; that raises
+        ``_Unconfirmed``. Failing to get a session sent nothing, so it retries.
+        """
         last: BaseException | None = None
-        attempt_timeout = self._call_timeout / 2  # two attempts fit in call()'s deadline
+        unconfirmed = False
         for _ in range(2):  # the second attempt runs on a fresh session
             session: ClientSession | None = None
             try:
@@ -213,6 +227,9 @@ class Bridge:
             except Exception as exc:  # noqa: BLE001 - any failure: reconnect once, then describe()
                 last = exc
                 await self._reset_session(session)
+                if session is not None and isinstance(exc, TimeoutError) and not replay_timeouts:
+                    unconfirmed = True
+                    break
                 continue
             if self._breaker.success():
                 logger.info("BlueOcean reachable again at %s", self._url)
@@ -220,6 +237,8 @@ class Bridge:
         message = describe(last, self._url)
         if self._breaker.failure():
             logger.warning("%s; pausing BlueOcean calls for %.0fs", message, self._cooldown)
+        if unconfirmed:
+            raise _Unconfirmed(message) from last
         raise BridgeUnavailable(message) from last
 
     async def _ensure_session(self) -> ClientSession:
@@ -323,17 +342,26 @@ class Bridge:
                 self._dropping = False
 
     async def _deliver(self, tool: str, args: dict) -> None:
-        """Keep one write until it lands: a short outage must not lose it."""
+        """Keep one write until it lands: a short outage must not lose it.
+
+        The exception is a write whose call_tool timed out: it may already be
+        stored, and memory_store is not idempotent, so it is dropped instead.
+        """
         while True:
             wait = self._breaker.remaining()
             if wait > 0:
                 await asyncio.sleep(wait)
                 continue
             try:
-                await self._call_with_retry(tool, args)
+                await self._call_with_retry(tool, args, self._call_timeout / 2,
+                                            replay_timeouts=False)
                 return
             except ToolCallError as exc:
                 logger.warning("BlueOcean rejected %s: %s", tool, exc)
+                return
+            except _Unconfirmed:
+                logger.warning("BlueOcean did not confirm %s in time; not resending it, "
+                               "since it may already be stored", tool)
                 return
             except BridgeUnavailable:
                 await asyncio.sleep(0.05)
