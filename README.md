@@ -265,6 +265,7 @@ uv run blueocean-admin manifest <project>
 uv run blueocean-admin list
 uv run blueocean-admin export <project>
 uv run blueocean-admin prune <project> --older-days 90 --max-importance 2 [--dry-run]
+uv run blueocean-admin prune <project> --kind hermes_turn --older-days 30 [--dry-run]
 uv run blueocean-admin snapshot <project> [--out ./backups]
 uv run blueocean-admin restore <project> <snapshot-file> --yes
 uv run blueocean-admin generate-token --write-env

@@ -17,6 +17,12 @@ from contextlib import AsyncExitStack
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from qdrant_client import QdrantClient
+from qdrant_client.http import models as qmodels
+
+from blueocean_mcp import admin
+from blueocean_mcp.config import DEFAULT_QDRANT_URL
+from blueocean_mcp.vector_store import collection_name
 
 from ._helpers import BIN, reset_project
 
@@ -113,10 +119,48 @@ async def overridden_kinds(seeded: dict[str, str]) -> None:
         print("  everything visible")
 
 
+def count_kind(kind: str | None) -> int:
+    """Points of one kind (None = points with no kind key at all)."""
+    client = QdrantClient(url=DEFAULT_QDRANT_URL)
+    if kind is None:
+        flt = qmodels.Filter(must=[qmodels.IsEmptyCondition(is_empty=qmodels.PayloadField(key="kind"))])
+    else:
+        flt = qmodels.Filter(must=[qmodels.FieldCondition(key="kind", match=qmodels.MatchValue(value=kind))])
+    return client.count(collection_name(PROJECT), count_filter=flt, exact=True).count
+
+
+def prune_by_kind() -> None:
+    """--kind removes only that kind, and works without any other filter."""
+    print("== prune --kind hermes_turn removes traces only ==")
+    before_plain = count_kind(None)
+    assert count_kind("hermes_turn") == 1 and before_plain >= 1
+
+    class _Args:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+    # The audit row goes to a telemetry server this test does not run; its
+    # failure path is covered in tests/telemetry_cli.py.
+    original = admin._report_audit
+    admin._report_audit = lambda row: True
+    try:
+        admin.cmd_prune(_Args(project=PROJECT, older_days=None, max_importance=None,
+                              kind="hermes_turn", dry_run=False))
+    finally:
+        admin._report_audit = original
+
+    assert count_kind("hermes_turn") == 0, "the trace survived prune --kind"
+    assert count_kind(None) == before_plain, "prune --kind deleted unkinded entries"
+    assert count_kind("session_summary") == 1, "prune --kind deleted another kind"
+    assert count_kind("custom_trace") == 1, "prune --kind deleted another kind"
+    print("  traces gone, everything else intact")
+
+
 async def main() -> None:
     reset_project(PROJECT)
     seeded = await default_kinds()
     await overridden_kinds(seeded)
+    prune_by_kind()
     print("\nTRACE KINDS TEST PASSED")
 
 

@@ -5,7 +5,7 @@ Commands:
     manifest <project>         - list areas/modules
     list                      - list projects
     export <project>           - dump all entries as JSON lines
-    prune <project> [--older-days N] [--max-importance I] [--dry-run]
+    prune <project> [--older-days N] [--max-importance I] [--kind K] [--dry-run]
                                - delete low-importance + old entries
     snapshot <project> [--out DIR]
                                - point-in-time backup (vectors included),
@@ -105,6 +105,7 @@ def cmd_prune(args: argparse.Namespace) -> None:
     now = int(time.time())
     max_age = args.older_days * 86400 if args.older_days is not None else None
     max_importance = args.max_importance
+    kind = getattr(args, "kind", None)
 
     must: list = []
     if max_age is not None:
@@ -121,8 +122,12 @@ def cmd_prune(args: argparse.Namespace) -> None:
                 range=qmodels.Range(lte=max_importance),
             )
         )
+    if kind:
+        must.append(
+            qmodels.FieldCondition(key="kind", match=qmodels.MatchValue(value=kind))
+        )
     if not must:
-        print("Nothing to prune: provide --older-days and/or --max-importance.")
+        print("Nothing to prune: provide --older-days, --max-importance and/or --kind.")
         return
 
     flt = qmodels.Filter(must=must) if must else None
@@ -425,6 +430,8 @@ def main() -> None:
     p_prune.add_argument("project")
     p_prune.add_argument("--older-days", type=int, default=None)
     p_prune.add_argument("--max-importance", type=int, default=None)
+    p_prune.add_argument("--kind", default=None,
+                         help="only entries of this kind (e.g. hermes_turn)")
     p_prune.add_argument("--dry-run", action="store_true")
     p_prune.set_defaults(func=cmd_prune)
 
