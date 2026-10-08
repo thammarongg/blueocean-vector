@@ -80,6 +80,12 @@ async def default_kinds() -> dict[str, str]:
             "trace": await store(session, "User asked about redis -> picked it", "hermes_turn"),
         }
 
+        print("== a new collection indexes kind (every default search filters on it) ==")
+        schema = QdrantClient(url=DEFAULT_QDRANT_URL).get_collection(collection_name(PROJECT)).payload_schema
+        assert "kind" in schema, f"no payload index on kind: {sorted(schema)}"
+        assert schema["kind"].data_type == qmodels.PayloadSchemaType.KEYWORD, schema["kind"]
+        print("  OK")
+
         print("== default search hides the trace, keeps everything else ==")
         found = await search(session)
         assert seeded["trace"] not in found, "a hermes_turn trace leaked into default search"
@@ -129,15 +135,16 @@ def count_kind(kind: str | None) -> int:
     return client.count(collection_name(PROJECT), count_filter=flt, exact=True).count
 
 
+class _Args:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
 def prune_by_kind() -> None:
     """--kind removes only that kind, and works without any other filter."""
     print("== prune --kind hermes_turn removes traces only ==")
     before_plain = count_kind(None)
     assert count_kind("hermes_turn") == 1 and before_plain >= 1
-
-    class _Args:
-        def __init__(self, **kw):
-            self.__dict__.update(kw)
 
     # The audit row goes to a telemetry server this test does not run; its
     # failure path is covered in tests/telemetry_cli.py.
