@@ -157,10 +157,14 @@ To update an installed skill from the repository, use `./scripts/update.sh` as d
 Every other client only reads memory when the agent decides to call `memory_search`. [Hermes](https://github.com/NousResearch/hermes-agent) can do better: it calls its active *memory provider* itself, before and after every turn. `integrations/hermes/blueocean/` is that provider.
 
 - **Before each turn** it finds which project the conversation is about and injects the relevant entries. It takes the project from a name in your message, or from Hermes's working directory, and you can correct it with the `blueocean_set_project` tool. The default budget is 600 tokens, and an entry already injected in the same session is not injected again.
-- **After each turn** it stores a **Turn Trace** (`kind=hermes_turn`, `importance=1`, area `hermes`, module `turns`). Before storing, it strips recalled memory and redacts credentials (including `NAME_TOKEN=`/`*_SECRET`-style assignments, quoted JSON values, Bearer/`sk-`/AWS/GitHub/Slack tokens, PEM private keys and URL passwords — best-effort regex, so don't paste secrets you can't afford to have stored). Traces are excluded from every search that doesn't ask for `kind="hermes_turn"`, so they never compete with real entries.
+- **After each turn** it stores a **Turn Trace** (`kind=hermes_turn`, `importance=1`, area `hermes`, module `turns`). Before storing, it strips recalled memory and redacts credentials: `NAME_TOKEN=`/`*_SECRET`/`*_KEY`/`credentials`/`passphrase` assignments, quoted JSON values, Bearer and `Authorization: Basic` headers, OpenAI `sk-`, Stripe `sk_live_`/`rk_test_`, Google `AIza`, AWS `AKIA`/`ASIA`, GitHub, GitLab `glpat-`, Hugging Face `hf_`, `npm_` and Slack tokens, PEM and PGP private keys, and URL passwords. The same redaction is applied to the recall query before it is sent. Traces are excluded from every search that doesn't ask for `kind="hermes_turn"`, so they never compete with real entries.
+- Redaction is best-effort pattern matching, so don't paste secrets you can't afford to have stored. Known misses include bare JWTs, Discord and Telegram bot tokens, a password stated in prose ("my password is X", in English or Thai), `mysql -pX`, `curl -u user:pass`, and unquoted values with spaces (`password = my pass phrase` keeps `pass phrase`).
 - Explicit writes still go through the `blueocean` MCP server entry. Keep it configured.
 
+Update the server first: without the server change that hides traces, every Turn Trace would show up in every agent's default search.
+
 ```bash
+./scripts/update.sh                     # rebuild the server (hides Turn Traces from default search)
 ./scripts/install_hermes_plugin.sh      # symlink into ~/.hermes/plugins/blueocean
 hermes memory setup blueocean           # pick it as the memory provider
 # then restart the Hermes gateway

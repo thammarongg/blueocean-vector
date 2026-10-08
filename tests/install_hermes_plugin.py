@@ -55,6 +55,18 @@ def main() -> None:
         assert res.returncode == 0 and not link.exists() and not link.is_symlink()
         print("  OK")
 
+        print("== --remove leaves a link to another checkout alone ==")
+        other = Path(d) / "other-checkout" / "blueocean"
+        other.mkdir(parents=True)
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(other)
+        res = run(home, "--remove")
+        assert res.returncode == 1, res.stdout + res.stderr
+        assert link.is_symlink() and link.resolve() == other.resolve(), "another checkout's link was removed"
+        assert str(other) in res.stdout, res.stdout
+        link.unlink()
+        print("  OK")
+
         print("== a real directory at the link path is never overwritten ==")
         link.mkdir(parents=True)
         (link / "keep.txt").write_text("mine")

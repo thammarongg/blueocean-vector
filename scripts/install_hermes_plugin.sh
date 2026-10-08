@@ -19,6 +19,11 @@ LINK="$HERMES_HOME/plugins/blueocean"
 case "${1:-}" in
   --remove)
     if [ -L "$LINK" ]; then
+      target="$(readlink "$LINK")"
+      if [ "$target" != "$SOURCE" ]; then
+        echo "!! $LINK points to $target, not this checkout ($SOURCE); not removing it"
+        exit 1
+      fi
       rm "$LINK"
       echo "  - removed $LINK"
     else
@@ -57,8 +62,10 @@ fi
 cat <<EOT
 
 Next:
-  1. hermes memory setup blueocean   (BLUEOCEAN_AUTH_TOKEN must be in $HERMES_HOME/.env)
-  2. restart the Hermes gateway      (memory providers are imported once per process)
+  1. ./scripts/update.sh             (rebuild the server first: it keeps Turn Traces out
+                                      of every agent's default search)
+  2. hermes memory setup blueocean   (BLUEOCEAN_AUTH_TOKEN must be in $HERMES_HOME/.env)
+  3. restart the Hermes gateway      (memory providers are imported once per process)
 Roll back: set memory.provider back to empty and restart; the blueocean MCP
 server entry keeps working on its own.
 EOT
