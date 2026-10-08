@@ -23,6 +23,7 @@ from .config import (
     DEFAULT_QDRANT_URL,
     MAX_CONTENT_CHARS,
     MAX_TOP_K,
+    TRACE_KINDS,
 )
 from .embeddings import Embedder
 
@@ -277,6 +278,9 @@ class VectorStore:
         exclude_kinds: list[str] | None = None,
     ) -> list[dict]:
         self._ensure_collection(project)
+        # Traces are only ever returned to a caller that names their kind.
+        if not kind:
+            exclude_kinds = [*(exclude_kinds or []), *TRACE_KINDS]
         vector = self._embedder.embed_query(query)
         # .search() was removed in qdrant-client 1.19; .query_points() is the
         # replacement (returns a QueryResponse wrapping .points).

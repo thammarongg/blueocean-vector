@@ -41,6 +41,14 @@ what failed. It says what happened, never what was decided, and is never a
 substitute for a Session Summary.
 _Avoid_: summary, mechanical summary, session log, audit
 
+**Turn Trace**:
+A record of one Hermes turn, written by the client after the turn: what the
+user said and what the assistant answered, cleaned and clipped. A
+client-written relative of the Session Trace. It says what was said, never
+what was decided, and is excluded from every search that does not ask for its
+kind.
+_Avoid_: turn log, transcript, chat history
+
 ### Sessions and their ending
 
 **Session**:

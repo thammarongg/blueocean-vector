@@ -8,6 +8,16 @@ DEFAULT_COLLECTION_PREFIX = os.getenv("BLUEOCEAN_COLLECTION_PREFIX", "blueocean"
 DEFAULT_MAX_TOKENS = int(os.getenv("BLUEOCEAN_MAX_TOKENS", "2000"))
 DEFAULT_TOP_K = int(os.getenv("BLUEOCEAN_TOP_K", "20"))
 
+# Kinds of record written mechanically, every turn or every session, rather
+# than because someone decided something. They are kept out of every search
+# that does not name a kind: most callers (Claude Code, Codex, Cursor) never
+# pass exclude_kinds, and left to them a trace would crowd real entries out of
+# the token budget. Asking with kind=<one of these> still reaches them. An
+# empty value turns the exclusion off.
+TRACE_KINDS = tuple(
+    k.strip() for k in os.getenv("BLUEOCEAN_TRACE_KINDS", "hermes_turn").split(",") if k.strip()
+)
+
 # Ceilings, not defaults: this is a shared server multiple agents hit at once,
 # so a single misbehaving caller shouldn't be able to store unbounded payloads
 # or force a wide-open Qdrant scan via an absurd top_k.

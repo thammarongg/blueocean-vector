@@ -66,6 +66,9 @@ def register_tools(mcp: MCPServer, store: VectorStore) -> None:
         ``session_summary``), so these are how you keep them out of an
         ordinary search, or ask for only them. Entries stored without a
         ``kind`` are never dropped by ``exclude_kinds``.
+        Trace kinds (``BLUEOCEAN_TRACE_KINDS``, default ``hermes_turn``) are
+        excluded whenever ``kind`` is not given; pass ``kind="hermes_turn"``
+        to read them.
         """
         time_range = None
         if time_range_start is not None or time_range_end is not None:
