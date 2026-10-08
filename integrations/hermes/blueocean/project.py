@@ -25,6 +25,22 @@ from dataclasses import dataclass, field
 
 _NAME_CHAR = r"[A-Za-z0-9_-]"
 
+# The server's project-name rule (src/blueocean_mcp/vector_store.py, _PROJECT_NAME_RE),
+# copied because this module must not import the server; tests/hermes_logic.py fails if
+# the two drift apart.
+PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,99}$")
+
+
+def valid_project_name(name: str) -> bool:
+    return bool(PROJECT_NAME_RE.match(name))
+
+
+def suggest_project_name(name: str) -> str | None:
+    """A valid name close to ``name`` (the server's own suggestion), or None."""
+    slug = re.sub(r"[^a-z0-9_-]+", "-", name.strip().lower())
+    slug = re.sub(r"-{2,}", "-", slug).strip("-")[:100]
+    return slug if valid_project_name(slug) else None
+
 
 def match_project(message: str | None, known: Iterable[str], ignore: Sequence[str]) -> str | None:
     """The longest known project named in ``message``, or None."""

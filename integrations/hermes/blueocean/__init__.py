@@ -30,8 +30,20 @@ from agent.secret_scope import get_secret
 from hermes_constants import hermes_home_key
 
 from .config import DEFAULTS, ignore_globs, load_config, save_config
-from .project import ProjectCatalog, ProjectTracker
-from .text import clean_turn_side, format_recall, trace_content, trace_summary, unseen
+from .project import (
+    ProjectCatalog,
+    ProjectTracker,
+    suggest_project_name,
+    valid_project_name,
+)
+from .text import (
+    clean_query,
+    clean_turn_side,
+    format_recall,
+    trace_content,
+    trace_summary,
+    unseen,
+)
 
 # .bridge imports mcp, so it loads lazily: without mcp this package must still
 # import, so Hermes finds the provider and reports it unavailable instead of
@@ -214,7 +226,8 @@ class BlueOceanMemoryProvider(MemoryProvider):
                 return ""
             result = self._bridge.call("memory_search", {
                 "project": project,
-                "query": query[:QUERY_LIMIT],
+                # Redacted: with a remote embedding provider the query leaves the machine.
+                "query": clean_query(query, QUERY_LIMIT),
                 "max_tokens": self._config["prefetch_max_tokens"],
             })
             if not isinstance(result, dict):
@@ -281,6 +294,16 @@ class BlueOceanMemoryProvider(MemoryProvider):
         known = self._catalog.names() if self._catalog else []
         match = next((name for name in known if name.lower() == project.lower()), None)
         project = match or project.lower()
+        if not valid_project_name(project):
+            # Setting it would make every later recall and Turn Trace fail quietly.
+            error: dict[str, Any] = {
+                "error": (f"invalid project name {project!r}: use lowercase letters, digits, "
+                          "'-' and '_', starting with a letter or digit, at most 100 chars"),
+            }
+            suggestion = suggest_project_name(project)
+            if suggestion:
+                error["suggestion"] = suggestion
+            return json.dumps(error)
         has_memory = match is not None
         self._tracker.set_active(self._key(kwargs.get("session_id", "")), project)
         reply: dict[str, Any] = {"ok": True, "project": project, "has_memory": has_memory}

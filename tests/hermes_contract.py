@@ -59,14 +59,34 @@ p.initialize("contract-session", hermes_home=os.environ["HERMES_HOME"],
 trivial = p.prefetch("ok", session_id="contract-session")
 set_out = json.loads(p.handle_tool_call("blueocean_set_project", {"project": project}))
 set_upper = json.loads(p.handle_tool_call("blueocean_set_project", {"project": project.upper()}))
+# Rejected, and the project set above stays active: the recall below still finds it.
+set_bad = json.loads(p.handle_tool_call("blueocean_set_project", {"project": "Blue Ocean"}))
 first = p.prefetch("which cache did we choose", session_id="contract-session")
 status = p.recall_status()
 second = p.prefetch("which cache did we choose", session_id="contract-session")
+
+
+class RecordingBridge:
+    def __init__(self):
+        self.calls = []
+
+    def call(self, name, args, timeout=None):
+        self.calls.append((name, args))
+        return {"projects": [project]} if name == "memory_list_projects" else {"summary": [], "full": []}
+
+
+real_bridge, recorder = p._bridge, RecordingBridge()
+p._bridge = recorder
+p.prefetch("which cache? password=hunter2secret sk-proj-ABCDEFGHIJKLMNOPQRST",
+           session_id="contract-session")
+p._bridge = real_bridge
+sent_queries = [args["query"] for name, args in recorder.calls if name == "memory_search"]
 p.sync_turn("<memory-context>recalled stuff</memory-context> which cache? password=hunter2",
             "We chose Redis.", session_id="contract-session")
 p.shutdown()
 print("RESULT " + json.dumps({
-    "trivial": trivial, "set": set_out, "set_upper": set_upper, "first": first,
+    "trivial": trivial, "set": set_out, "set_upper": set_upper, "set_bad": set_bad,
+    "first": first, "sent_queries": sent_queries,
     "count": status.count if status else 0,
     "label": status.provider_label if status else "",
     "second": second,
@@ -180,6 +200,11 @@ def main() -> None:
         assert out["set"] == {**out["set"], "ok": True, "project": PROJECT, "has_memory": True}
         assert out["set_upper"] == {**out["set_upper"], "ok": True, "project": PROJECT,
                                     "has_memory": True}, out["set_upper"]
+        print("  OK")
+
+        print("== an invalid project name is rejected with a suggestion, not set ==")
+        assert "error" in out["set_bad"] and "ok" not in out["set_bad"], out["set_bad"]
+        assert out["set_bad"].get("suggestion") == "blue-ocean", out["set_bad"]
         assert "BlueOcean project memory - " + PROJECT in out["first"], out["first"]
         assert "Chose Redis for the cache" in out["first"]
         assert out["count"] == 1 and out["label"] == f"BlueOcean ({PROJECT})"
@@ -187,6 +212,13 @@ def main() -> None:
 
         print("== the same recall twice injects nothing new ==")
         assert out["second"] == "", out["second"]
+        print("  OK")
+
+        print("== the recall query is redacted before it is sent ==")
+        assert len(out["sent_queries"]) == 1, out["sent_queries"]
+        query = out["sent_queries"][0]
+        assert "hunter2secret" not in query and "ABCDEFGHIJKLMNOPQRST" not in query, query
+        assert "[REDACTED]" in query and query.startswith("which cache?"), query
         print("  OK")
 
         print("== the Turn Trace: stored, fence stripped, password redacted ==")

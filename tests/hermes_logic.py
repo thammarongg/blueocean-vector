@@ -14,6 +14,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from blueocean_mcp.vector_store import _PROJECT_NAME_RE as SERVER_PROJECT_NAME_RE
+
 from ._hermes import load_plugin_module
 
 config = load_plugin_module("config")
@@ -262,6 +264,20 @@ def test_query_is_redacted() -> None:
     print("  OK")
 
 
+def test_project_name_validation() -> None:
+    print("== project: names checked against the server's rule ==")
+    assert project.PROJECT_NAME_RE.pattern == SERVER_PROJECT_NAME_RE.pattern, (
+        "the plugin's project-name rule drifted from the server's")
+    for good in ("blueocean", "blue-ocean", "a", "x_1", "9lives"):
+        assert project.valid_project_name(good), good
+    for bad in ("Blue Ocean", "blue ocean", "", "-x", "a/b", "a" * 101):
+        assert not project.valid_project_name(bad), bad
+    assert project.suggest_project_name("Blue Ocean") == "blue-ocean"
+    assert project.suggest_project_name("team/a!!") == "team-a"
+    assert project.suggest_project_name("!!!") is None
+    print("  OK")
+
+
 def test_turn_cleaning() -> None:
     print("== text: turn sides cleaned, clipped, summarised ==")
     long_side = "x" * 5000
@@ -392,6 +408,7 @@ def main() -> None:
     test_redaction_formats()
     test_straddling_secret_is_not_cut()
     test_query_is_redacted()
+    test_project_name_validation()
     test_bounded_work()
     test_turn_cleaning()
     test_unseen_and_format()
