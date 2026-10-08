@@ -13,11 +13,12 @@ Hermes: config (settings), text (cleaning and formatting), project
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import logging
 import os
 import threading
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from agent.memory_provider import (
     MemoryProvider,
@@ -28,10 +29,15 @@ from agent.memory_provider import (
 from agent.secret_scope import get_secret
 from hermes_constants import hermes_home_key
 
-from .bridge import Bridge, BridgeUnavailable
 from .config import DEFAULTS, ignore_globs, load_config, save_config
 from .project import ProjectCatalog, ProjectTracker
 from .text import clean_turn_side, format_recall, trace_content, trace_summary, unseen
+
+# .bridge imports mcp, so it loads lazily: without mcp this package must still
+# import, so Hermes finds the provider and reports it unavailable instead of
+# "not found".
+if TYPE_CHECKING:
+    from .bridge import Bridge
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +79,8 @@ def _spawn(target, name: str) -> threading.Thread:
 
 
 def _bridge_for(url: str, token: str) -> Bridge:
+    from .bridge import Bridge
+
     with _BRIDGES_LOCK:
         bridge = _BRIDGES.get((url, token))
         if bridge is None:
@@ -184,17 +192,21 @@ class BlueOceanMemoryProvider(MemoryProvider):
 
     def _resolve_project(self, key: str, query: str) -> str | None:
         known = self._catalog.names()
-        active = self._tracker.observe(key, query, known,
-                                       ignore_globs(self._config["ignore_projects"]))
-        if active is None and self._cwd_project and self._cwd_project in known:
-            self._tracker.set_active(key, self._cwd_project)
-            active = self._cwd_project
+        ignore = ignore_globs(self._config["ignore_projects"])
+        active = self._tracker.observe(key, query, known, ignore)
+        cwd = self._cwd_project
+        if (active is None and cwd and cwd in known
+                and not any(fnmatch.fnmatchcase(cwd, glob) for glob in ignore)):
+            self._tracker.set_active(key, cwd)
+            active = cwd
         return active
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
         self._last_status = None
         if self._bridge is None or is_trivial_prompt(query):
             return ""
+        from .bridge import BridgeUnavailable  # already loaded: a bridge exists
+
         key = self._key(session_id)
         try:
             project = self._resolve_project(key, query)
@@ -205,21 +217,23 @@ class BlueOceanMemoryProvider(MemoryProvider):
                 "query": query[:QUERY_LIMIT],
                 "max_tokens": self._config["prefetch_max_tokens"],
             })
+            if not isinstance(result, dict):
+                return ""
+            summaries, fulls = unseen(result, self._tracker.seen(key))
+            if not summaries:
+                return ""
+            text = format_recall(project, summaries, fulls)
+            self._tracker.mark_seen(key, [str(rid) for r in summaries + fulls
+                                          if (rid := r.get("id")) is not None])
+            status = RecallStatus(provider_label=f"BlueOcean ({project})", count=len(summaries))
         except BridgeUnavailable as exc:
             logger.debug("BlueOcean prefetch skipped: %s", exc)
             return ""
         except Exception:
             logger.warning("BlueOcean prefetch failed", exc_info=True)
             return ""
-        if not isinstance(result, dict):
-            return ""
-        summaries, fulls = unseen(result, self._tracker.seen(key))
-        if not summaries:
-            return ""
-        self._tracker.mark_seen(key, [str(r["id"]) for r in summaries + fulls])
-        self._last_status = RecallStatus(provider_label=f"BlueOcean ({project})",
-                                         count=len(summaries))
-        return format_recall(project, summaries, fulls)
+        self._last_status = status
+        return text
 
     def recall_status(self) -> RecallStatus | None:
         return self._last_status
@@ -263,8 +277,12 @@ class BlueOceanMemoryProvider(MemoryProvider):
         project = str((args or {}).get("project") or "").strip()
         if not project:
             return json.dumps({"error": "project is required"})
+        # Server project names are lowercase; take the catalog's spelling when it has one.
+        known = self._catalog.names() if self._catalog else []
+        match = next((name for name in known if name.lower() == project.lower()), None)
+        project = match or project.lower()
+        has_memory = match is not None
         self._tracker.set_active(self._key(kwargs.get("session_id", "")), project)
-        has_memory = project in (self._catalog.names() if self._catalog else [])
         reply: dict[str, Any] = {"ok": True, "project": project, "has_memory": has_memory}
         if not has_memory:
             reply["note"] = "No memory stored for this project yet; recall stays empty until something is."

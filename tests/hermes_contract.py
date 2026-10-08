@@ -6,7 +6,9 @@ this repo. Hermes discovers the provider
 through plugins.memory.load_memory_provider, exactly as `memory.provider:
 blueocean` would. The child then drives one session: an explicit project
 switch, a recall, the same recall again (nothing new to inject), and a turn
-whose text carries a memory-context fence and a password.
+whose text carries a memory-context fence and a password. A second child
+blocks the `mcp` package and checks the provider still loads, reporting
+itself unavailable rather than vanishing from discovery.
 
 The child never imports hermes_bootstrap and never goes through the `hermes`
 launcher: with a throwaway HERMES_HOME, bootstrap treats the install as
@@ -56,6 +58,7 @@ p.initialize("contract-session", hermes_home=os.environ["HERMES_HOME"],
              platform="cli", agent_context="primary")
 trivial = p.prefetch("ok", session_id="contract-session")
 set_out = json.loads(p.handle_tool_call("blueocean_set_project", {"project": project}))
+set_upper = json.loads(p.handle_tool_call("blueocean_set_project", {"project": project.upper()}))
 first = p.prefetch("which cache did we choose", session_id="contract-session")
 status = p.recall_status()
 second = p.prefetch("which cache did we choose", session_id="contract-session")
@@ -63,12 +66,30 @@ p.sync_turn("<memory-context>recalled stuff</memory-context> which cache? passwo
             "We chose Redis.", session_id="contract-session")
 p.shutdown()
 print("RESULT " + json.dumps({
-    "trivial": trivial, "set": set_out, "first": first,
+    "trivial": trivial, "set": set_out, "set_upper": set_upper, "first": first,
     "count": status.count if status else 0,
     "label": status.provider_label if status else "",
     "second": second,
 }))
 '''
+
+CHILD_NO_MCP = r'''
+import json, os, sys
+sys.modules["mcp"] = None  # any `import mcp...` now raises ImportError
+sys.path.insert(0, os.environ["HERMES_AGENT_DIR"])
+from agent.memory_provider import MemoryProvider
+from plugins.memory import load_memory_provider
+
+p = load_memory_provider("blueocean")
+assert isinstance(p, MemoryProvider), f"discovery returned {p!r}"
+print("RESULT " + json.dumps({"available": p.is_available(), "reason": p.unavailable_reason()}))
+'''
+
+
+def child_result(child: subprocess.CompletedProcess) -> dict:
+    line = next((ln for ln in child.stdout.splitlines() if ln.startswith("RESULT ")), None)
+    assert child.returncode == 0 and line, f"child failed:\n{child.stdout}\n{child.stderr}"
+    return json.loads(line[len("RESULT "):])
 
 
 def hermes_python() -> list[str]:
@@ -137,13 +158,19 @@ def main() -> None:
                 env.pop(var, None)
             before = snapshot(HERMES_AGENT_DIR)
             try:
-                child = subprocess.run([*python, "-c", CHILD], env=env, capture_output=True,
-                                       text=True, timeout=180, check=False)
+                children = [subprocess.run([*python, "-c", script], env=env, capture_output=True,
+                                           text=True, timeout=180, check=False)
+                            for script in (CHILD_NO_MCP, CHILD)]
             finally:
                 assert_unchanged(before, snapshot(HERMES_AGENT_DIR))
-        line = next((ln for ln in child.stdout.splitlines() if ln.startswith("RESULT ")), None)
-        assert child.returncode == 0 and line, f"child failed:\n{child.stdout}\n{child.stderr}"
-        out = json.loads(line[len("RESULT "):])
+
+        print("== without mcp: loads, reports itself unavailable ==")
+        no_mcp = child_result(children[0])
+        assert no_mcp["available"] is False, no_mcp
+        assert "mcp" in no_mcp["reason"], no_mcp
+        print("  OK")
+
+        out = child_result(children[1])
 
         print("== discovery, availability, trivial prompt ==")
         assert out["trivial"] == "", "a trivial prompt must not recall"
@@ -151,6 +178,8 @@ def main() -> None:
 
         print("== blueocean_set_project then recall ==")
         assert out["set"] == {**out["set"], "ok": True, "project": PROJECT, "has_memory": True}
+        assert out["set_upper"] == {**out["set_upper"], "ok": True, "project": PROJECT,
+                                    "has_memory": True}, out["set_upper"]
         assert "BlueOcean project memory - " + PROJECT in out["first"], out["first"]
         assert "Chose Redis for the cache" in out["first"]
         assert out["count"] == 1 and out["label"] == f"BlueOcean ({PROJECT})"
