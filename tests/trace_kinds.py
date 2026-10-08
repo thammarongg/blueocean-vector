@@ -13,6 +13,7 @@ Run with:
 import asyncio
 import json
 import os
+import subprocess
 from contextlib import AsyncExitStack
 
 from mcp import ClientSession, StdioServerParameters
@@ -24,9 +25,11 @@ from blueocean_mcp import admin
 from blueocean_mcp.config import DEFAULT_QDRANT_URL
 from blueocean_mcp.vector_store import collection_name
 
-from ._helpers import BIN, reset_project
+from ._helpers import BIN, REPO_ROOT, reset_project
 
 PROJECT = "trace-kinds-project"
+ADMIN = str(REPO_ROOT / ".venv" / "bin" / "blueocean-admin")
+DEAD_PORT = 8799  # nothing listens here: an audit row from a refused prune goes nowhere
 QUERY = {"project": PROJECT, "query": "which cache did we pick, redis or memcached"}
 
 
@@ -140,6 +143,36 @@ class _Args:
         self.__dict__.update(kw)
 
 
+def blank_kind_is_refused() -> None:
+    """`--kind "$K"` with K unset must not widen a prune to every kind."""
+    print("== prune --kind '' is refused, by the CLI and by cmd_prune ==")
+    before = {k: count_kind(k) for k in (None, "hermes_turn", "session_summary", "custom_trace")}
+    env = {**os.environ, "BLUEOCEAN_SERVER_URL": f"http://127.0.0.1:{DEAD_PORT}"}
+    for blank in ("", "   "):
+        res = subprocess.run([ADMIN, "prune", PROJECT, "--kind", blank, "--max-importance", "5"],
+                             capture_output=True, text=True, env=env, timeout=120, check=False)
+        assert res.returncode == 2, f"blank --kind {blank!r} was not refused: rc={res.returncode}\n{res.stdout}{res.stderr}"
+        assert "--kind" in res.stderr, res.stderr
+
+    original = admin._report_audit
+    admin._report_audit = lambda row: True
+    try:
+        for blank in ("", "  "):
+            try:
+                admin.cmd_prune(_Args(project=PROJECT, older_days=30, max_importance=5,
+                                      kind=blank, dry_run=False))
+            except ValueError as exc:
+                assert "kind" in str(exc), exc
+            else:
+                raise AssertionError(f"cmd_prune accepted a blank kind {blank!r}")
+    finally:
+        admin._report_audit = original
+
+    after = {k: count_kind(k) for k in before}
+    assert after == before, f"a refused prune deleted entries: {before} -> {after}"
+    print("  refused, nothing deleted")
+
+
 def prune_by_kind() -> None:
     """--kind removes only that kind, and works without any other filter."""
     print("== prune --kind hermes_turn removes traces only ==")
@@ -167,6 +200,7 @@ async def main() -> None:
     reset_project(PROJECT)
     seeded = await default_kinds()
     await overridden_kinds(seeded)
+    blank_kind_is_refused()
     prune_by_kind()
     print("\nTRACE KINDS TEST PASSED")
 

@@ -100,12 +100,16 @@ def cmd_export(args: argparse.Namespace) -> None:
 
 
 def cmd_prune(args: argparse.Namespace) -> None:
+    kind = getattr(args, "kind", None)
+    if kind is not None and not str(kind).strip():
+        # A blank kind would drop out of the filter and widen the prune to every kind
+        # (`--kind "$K"` with K unset). main() rejects it too; this guards other callers.
+        raise ValueError("prune: kind must not be blank")
     client = _client()
     name = collection_name(args.project)
     now = int(time.time())
     max_age = args.older_days * 86400 if args.older_days is not None else None
     max_importance = args.max_importance
-    kind = getattr(args, "kind", None)
 
     must: list = []
     if max_age is not None:
@@ -476,6 +480,9 @@ def main() -> None:
     p_token.set_defaults(func=cmd_generate_token)
 
     args = parser.parse_args()
+    if args.command == "prune" and args.kind is not None and not args.kind.strip():
+        p_prune.error("--kind must not be blank (an unset variable?); "
+                      "omit --kind to prune every kind")
     args.func(args)
 
 
