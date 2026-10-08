@@ -22,31 +22,40 @@ SUMMARY_SIDE_LIMIT = 150
 
 _FENCE_RE = re.compile(r"<\s*memory-context\s*>[\s\S]*?<\s*/\s*memory-context\s*>", re.IGNORECASE)
 
+_UNCLOSED_FENCE_RE = re.compile(r"<\s*memory-context\s*>[\s\S]*$", re.IGNORECASE)
+
 _START = r"(?<![A-Za-z0-9_])"
 _SECRET_PATTERNS = [
-    re.compile(_START + r"Bearer\s+[A-Za-z0-9._~+/=-]{8,}", re.IGNORECASE),
+    re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"),
+    re.compile(_START + r"Bearer\s+(?=[A-Za-z0-9._~+/=-]*\d)[A-Za-z0-9._~+/=-]{16,}", re.IGNORECASE),
     re.compile(_START + r"sk-[A-Za-z0-9_-]{16,}"),
     re.compile(_START + r"AKIA[0-9A-Z]{16}(?![0-9A-Z])"),
     re.compile(_START + r"gh[pousr]_[A-Za-z0-9]{20,}"),
     re.compile(_START + r"github_pat_[A-Za-z0-9_]{20,}"),
     re.compile(_START + r"xox[abpr]-[A-Za-z0-9-]{10,}"),
 ]
+_URL_PASSWORD_RE = re.compile(_START + r"([a-z][a-z0-9+.-]*://[^\s:/@]+:)[^\s@/]+(@)", re.IGNORECASE)
+# The key may carry name prefixes/suffixes (GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY), so it needs
+# no left anchor. The value is a whole quoted string or a run of non-space characters.
 _ASSIGNMENT_RE = re.compile(
-    _START + r"(password|passwd|token|secret|api_key|apikey)(\s*[:=]\s*)(\S+)", re.IGNORECASE
+    r"([A-Za-z0-9_.-]*(?:password|passwd|pwd|token|secret|api[_-]?key|access[_-]?key|private[_-]?key)"
+    r"[A-Za-z0-9_.-]*[\"']?\s*[:=]\s*)"
+    r"(\"(?:[^\"\\]|\\.)*\"|'[^']*'|\S+)",
+    re.IGNORECASE,
 )
 
 REDACTED = "[REDACTED]"
 
 
 def strip_memory_context(text: str | None) -> str:
-    return _FENCE_RE.sub("", text or "").strip()
+    return _UNCLOSED_FENCE_RE.sub("", _FENCE_RE.sub("", text or "")).strip()
 
 
 def redact(text: str) -> str:
-    text = _ASSIGNMENT_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{REDACTED}", text)
     for pattern in _SECRET_PATTERNS:
         text = pattern.sub(REDACTED, text)
-    return text
+    text = _URL_PASSWORD_RE.sub(lambda m: f"{m.group(1)}{REDACTED}{m.group(2)}", text)
+    return _ASSIGNMENT_RE.sub(lambda m: f"{m.group(1)}{REDACTED}", text)
 
 
 def clip(text: str, limit: int) -> str:
@@ -82,7 +91,7 @@ def unseen(result: dict, seen: set[str]) -> tuple[list[dict], list[dict]]:
 def _date(ts) -> str:
     try:
         return time.strftime("%Y-%m-%d", time.gmtime(int(ts)))
-    except (TypeError, ValueError, OverflowError):
+    except (TypeError, ValueError, OverflowError, OSError):
         return "?"
 
 

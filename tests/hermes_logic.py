@@ -83,6 +83,36 @@ def test_fence_and_redaction() -> None:
     print("  OK")
 
 
+def test_redaction_gaps() -> None:
+    print("== text: prefixed, quoted, PEM, URL credentials; unclosed fence ==")
+    leaks = {
+        "GITHUB_TOKEN=ghx1234567890abcdef": "ghx1234567890abcdef",
+        "export AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG": "wJalrXUtnFEMI/K7MDENG",
+        "my_token=abc123": "abc123",
+        "db-password: s3cr3t": "s3cr3t",
+        '{"password": "hunter2"}': "hunter2",
+        'password = "my pass phrase"': "pass phrase",
+        "api_key='k-123 456'": "123 456",
+        "token: Bearer abcdefgh12345678": "abcdefgh12345678",
+        "-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\nq1w2e3r4t5\n"
+        "-----END RSA PRIVATE KEY-----": "MIIEowIBAAKCAQEA",
+        "postgres://app:pa55word@db.local:5432/x": "pa55word",
+        "รหัสGITHUB_TOKEN=abc999": "abc999",
+    }
+    for raw, secret in leaks.items():
+        out = text.redact(raw)
+        assert secret not in out, f"secret survived redaction: {raw!r} -> {out!r}"
+        assert "[REDACTED]" in out
+    assert "postgres://app:[REDACTED]@db.local" in text.redact("postgres://app:pa55word@db.local:5432/x")
+
+    prose = "use Bearer authentication scheme here"
+    assert text.redact(prose) == prose
+
+    stripped = text.strip_memory_context("hi <memory-context>recalled stuff")
+    assert "recalled stuff" not in stripped and stripped.startswith("hi")
+    print("  OK")
+
+
 def test_turn_cleaning() -> None:
     print("== text: turn sides cleaned, clipped, summarised ==")
     long_side = "x" * 5000
@@ -130,6 +160,7 @@ def test_unseen_and_format() -> None:
 def main() -> None:
     test_config()
     test_fence_and_redaction()
+    test_redaction_gaps()
     test_turn_cleaning()
     test_unseen_and_format()
     print("\nHERMES LOGIC TEST PASSED")
