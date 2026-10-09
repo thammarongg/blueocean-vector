@@ -58,8 +58,9 @@ _SECRET_PATTERNS = [
 ]
 # The password runs to the last `@` before whitespace, so one holding `/`, `+` or a raw
 # `@` is dropped whole. The run is bounded, so each scheme costs at most ~2x256 steps.
+# The username may be empty: Redis URLs carry only a password (`redis://:pw@host`).
 _URL_PASSWORD_RE = re.compile(
-    _START + r"([a-z][a-z0-9+.-]{0,30}://[^\s:/@]{1,100}:)\S{1,256}(@)", re.IGNORECASE
+    _START + r"([a-z][a-z0-9+.-]{0,30}://[^\s:/@]{0,100}:)\S{1,256}(@)", re.IGNORECASE
 )
 # The key may carry name prefixes/suffixes (GITHUB_TOKEN, AWS_SECRET_ACCESS_KEY). It starts
 # at the beginning of an identifier run, and the prefix and suffix are bounded. A name that

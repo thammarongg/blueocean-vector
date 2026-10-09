@@ -147,6 +147,7 @@ def test_bounded_work() -> None:
         "credentials": "credentials " * 1666,
         "url no @": "x://u:" + "a" * 19994,
         "url a@": "x://u:" + "a@" * 9997,
+        "url empty user": "x://:" * 4000,
         "url many": "a://b:" * 3333,
         "url slashes": "x://u:" + "/" * 19994,
         "pgp": "-----BEGIN PGP PRIVATE KEY BLOCK-----\n" + "A" * 19962,
@@ -201,6 +202,9 @@ def test_redaction_formats() -> None:
         "postgres://app:ab/cd+ef@db.local/x": "ab/cd+ef",
         "DATABASE_URL=postgres://app:ab/cd@db/x": "ab/cd",
         "postgres://app:p@ss@db.local/x": "p@ss",
+        # Redis has no username: the password follows an empty userinfo.
+        "redis://:s3cretPw42@cache.local:6379/0": "s3cretPw42",
+        "REDIS_URL=rediss://:s3cretPw42@cache.local:6380": "s3cretPw42",
         # Thai letters directly before a token: no \b boundary there.
         f"คีย์คือ{stripe}": "51HxYzAbCdEfGhIjKlMnOpQrStUv",
         "โทเคนhf_AbCdEfGhIjKlMnOpQrStUvWxYz123456นะ": "AbCdEfGhIjKlMnOpQrStUvWxYz123456",
@@ -213,6 +217,8 @@ def test_redaction_formats() -> None:
             == "postgres://app:[REDACTED]@db.local/x")
     # The password runs to the last `@`, so one holding a raw `@` is dropped whole.
     assert text.redact("postgres://app:p@ss@db.local/x") == "postgres://app:[REDACTED]@db.local/x"
+    assert (text.redact("redis://:s3cretPw42@cache.local:6379/0")
+            == "redis://:[REDACTED]@cache.local:6379/0")
 
     # A key name only counts in an assignment (`:` or `=`), so prose is left alone.
     prose = [
