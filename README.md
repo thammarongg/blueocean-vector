@@ -57,12 +57,12 @@ There's already a well-populated field of "memory for AI agents" projects. Worth
 | [Letta](https://github.com/letta-ai/letta) (formerly MemGPT) | Full stateful-agent platform, server + SDK | Semi-automatic — the agent's own LLM pages memory in/out | Yes, for archival memory |
 | [Memorix](https://github.com/AVIDS2/memorix) | MCP-native, no server to run | Explicit — the calling agent writes | **Fallback only** (~1.8s), keyword search is primary |
 | threadctx-mcp | MCP-native | Explicit + optional passive git capture | **Paid cloud tier** — local mode is keyword-only |
-| **BlueOcean Vector** | MCP-native, one shared server | Explicit — the calling agent writes | **Primary and always-on** |
+| **BlueOcean Vector** | MCP-native, one shared server | Explicit — the calling agent writes (optional automatic recall through the [Hermes provider](#hermes-automatic-recall)) | **Primary and always-on** |
 
 Two honest takeaways:
 
 - **The "MCP-native, works with any client" niche isn't empty** — Memorix already lives there, with more built-in tools. What's different here is that vector search is the primary retrieval path rather than a fallback or something gated behind a paid tier, the default embedding model is genuinely multilingual (Thai+English tested), and it's built to run as one shared, persistent server rather than a zero-install per-agent tool — bearer-token auth, a documented path to ECS, Kubernetes-ready health probes, and real fixes for the concurrency problems a *shared* server actually hits.
-- **No automatic extraction or consolidation** — unlike mem0, Graphiti, Letta, cognee, or LangMem, nothing here reads your conversation and decides what's worth remembering. That's a deliberate simplicity trade-off, not a missing feature: an agent has to explicitly call `memory_store`. If you want a system that reasons about what to keep on your behalf, one of the projects above will do that better than this will.
+- **No automatic extraction or consolidation** — unlike mem0, Graphiti, Letta, cognee, or LangMem, nothing here reads your conversation and decides what's worth remembering. That's a deliberate simplicity trade-off, not a missing feature: an agent has to explicitly call `memory_store`. The one automatic write is the [Hermes provider](#hermes-automatic-recall)'s Turn Trace, a mechanical record of a local session's turn rather than a judgment about what matters, and it is kept out of every search that doesn't ask for it. If you want a system that reasons about what to keep on your behalf, one of the projects above will do that better than this will.
 
 ### Memory shouldn't try to hold a million lines
 
