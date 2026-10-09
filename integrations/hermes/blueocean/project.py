@@ -45,9 +45,15 @@ def suggest_project_name(name: str) -> str | None:
 
 
 def alias_map(projects: dict[str, list[str]]) -> dict[str, str]:
-    """Every name that detects a project (the project itself and its aliases) -> project."""
+    """Every name that detects a project (the project itself and its aliases) -> project.
+
+    A project the server would reject is skipped: selecting it would make every search
+    and Turn Trace for the session fail quietly.
+    """
     names: dict[str, str] = {}
     for project, aliases in projects.items():
+        if not valid_project_name(project):
+            continue
         names[project] = project
         for alias in aliases:
             names.setdefault(alias, project)

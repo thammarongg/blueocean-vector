@@ -410,7 +410,9 @@ def test_catalog() -> None:
 def test_project_settings() -> None:
     print("== config: projects allowlist with aliases, sync_turns_platforms ==")
     assert config.DEFAULTS["projects"] == {}, "no allowlist by default: behavior unchanged"
-    assert config.DEFAULTS["sync_turns_platforms"] == ["cli"], "Turn Traces off on chat apps"
+    # Local sessions keep their traces (Hermes: cli, tui, desktop chat panel, editor ACP);
+    # chat apps (discord, telegram, ...) are left out.
+    assert config.DEFAULTS["sync_turns_platforms"] == ["cli", "tui", "desktop", "acp"]
 
     # The text form is what `hermes memory setup` can collect; JSON can hold the dict.
     text_form = "blueocean-vector:blueocean|bo, Thalassaops ,tidepool:"
@@ -418,11 +420,21 @@ def test_project_settings() -> None:
         "blueocean-vector": ["blueocean", "bo"], "thalassaops": [], "tidepool": []}
     assert config.parse_projects({"Blueocean-Vector": ["BlueOcean", " "], "x": "a|b"}) == {
         "blueocean-vector": ["blueocean"], "x": ["a", "b"]}
-    for junk in (None, 42, "", ":alias", {"": ["a"]}, ["blueocean-vector"]):
+    # A plain list is projects without aliases; it must not fall back to "any project".
+    assert config.parse_projects(["Blueocean-Vector", "tidepool", 3]) == {
+        "blueocean-vector": [], "tidepool": []}
+    # Non-string aliases are dropped, not turned into words like "none"/"true".
+    assert config.parse_projects({"a": [None, True, "x"]}) == {"a": ["x"]}
+    # A project listed twice keeps the aliases of both entries.
+    assert config.parse_projects("a:x, a:y|x") == {"a": ["x", "y"]}
+    for junk in (None, 42, "", ":alias", {"": ["a"]}):
         assert config.parse_projects(junk) == {}, f"junk must parse to no allowlist: {junk!r}"
     assert config.parse_platforms("cli, Discord ,,") == ["cli", "discord"]
     assert config.parse_platforms(["CLI"]) == ["cli"]
     assert config.parse_platforms("") == [], "an empty list means no platform writes traces"
+    # A typo like `true` must not take the provider down: it falls back to the default.
+    for typo in (True, 5, None, {"cli": 1}):
+        assert config.parse_platforms(typo) == config.DEFAULTS["sync_turns_platforms"], typo
 
     with tempfile.TemporaryDirectory() as home:
         config.save_config({"projects": "blueocean-vector:blueocean",
@@ -440,6 +452,9 @@ def test_project_settings() -> None:
 
 def test_alias_matching() -> None:
     print("== project: an allowlist limits detection, aliases resolve to their project ==")
+    # A listed name the server would reject is skipped: selecting it would make every
+    # search and trace fail quietly.
+    assert project.alias_map({"blue ocean": ["bo"], "Upper": []}) == {}
     allowed = project.alias_map({"blueocean-vector": ["blueocean", "bo"], "tidepool": []})
     assert allowed == {"blueocean-vector": "blueocean-vector", "blueocean": "blueocean-vector",
                        "bo": "blueocean-vector", "tidepool": "tidepool"}

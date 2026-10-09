@@ -21,9 +21,10 @@ DEFAULTS: dict[str, Any] = {
     # Projects that may be auto-detected, each with its aliases. Empty = any project in
     # the store except ignore_projects; once set, only these (and their aliases).
     "projects": {},
-    # Platforms whose turns are stored as Turn Traces. Chat apps are left out by
-    # default: casual and personal talk does not belong in the store every agent reads.
-    "sync_turns_platforms": ["cli"],
+    # Platforms whose turns are stored as Turn Traces: Hermes's local sessions (terminal,
+    # TUI, desktop chat panel, editor ACP). Chat apps such as discord and telegram are
+    # left out: casual and personal talk does not belong in the store every agent reads.
+    "sync_turns_platforms": ["cli", "tui", "desktop", "acp"],
 }
 
 _MIN_TOKENS, _MAX_TOKENS = 100, 2000
@@ -81,8 +82,14 @@ def ignore_globs(value: str | list[str] | None) -> list[str]:
     return [str(p).strip() for p in parts if str(p).strip()]
 
 
-def parse_platforms(value: str | list[str] | None) -> list[str]:
-    """``sync_turns_platforms`` as lowercase names, from a comma string or a list."""
+def parse_platforms(value: Any) -> list[str]:
+    """``sync_turns_platforms`` as lowercase names, from a comma string or a list.
+
+    Anything else falls back to the default, so a typo such as ``true`` cannot take the
+    provider down (this runs in ``initialize``).
+    """
+    if not isinstance(value, (str, list)):
+        return list(DEFAULTS["sync_turns_platforms"])
     return [p.lower() for p in ignore_globs(value)]
 
 
@@ -90,23 +97,30 @@ def _names(value: Any) -> list[str]:
     parts = value.split("|") if isinstance(value, str) else value
     if not isinstance(parts, list):
         return []
-    return [str(p).strip().lower() for p in parts if str(p).strip()]
+    return [p.strip().lower() for p in parts if isinstance(p, str) and p.strip()]
 
 
 def parse_projects(value: Any) -> dict[str, list[str]]:
     """``projects`` as {project: [aliases]}, lowercased.
 
-    JSON holds a dict (aliases as a list or an ``a|b`` string). ``hermes memory setup``
-    can only collect text, so ``"blueocean-vector:blueocean|bo, tidepool"`` works too.
-    Anything else means no allowlist.
+    JSON holds a dict (aliases as a list or an ``a|b`` string) or a plain list of
+    projects. ``hermes memory setup`` can only collect text, so
+    ``"blueocean-vector:blueocean|bo, tidepool"`` works too. A project listed twice
+    keeps the aliases of both entries. Anything else means no allowlist.
     """
     if isinstance(value, str):
-        value = dict(item.partition(":")[::2] for item in value.split(","))
-    if not isinstance(value, dict):
+        pairs = [item.partition(":")[::2] for item in value.split(",")]
+    elif isinstance(value, list):
+        pairs = [(item, []) for item in value if isinstance(item, str)]
+    elif isinstance(value, dict):
+        pairs = list(value.items())
+    else:
         return {}
     projects: dict[str, list[str]] = {}
-    for name, aliases in value.items():
+    for name, aliases in pairs:
         key = str(name).strip().lower()
-        if key:
-            projects[key] = _names(aliases)
+        if not key:
+            continue
+        merged = projects.setdefault(key, [])
+        merged.extend(a for a in _names(aliases) if a not in merged)
     return projects

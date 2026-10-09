@@ -74,6 +74,12 @@ class RecordingBridge:
         self.calls.append((name, args))
         return {"projects": [project]} if name == "memory_list_projects" else {"summary": [], "full": []}
 
+    def submit(self, name, args):
+        self.calls.append((name, args))
+
+    def drain(self, timeout):
+        return True
+
 
 real_bridge, recorder = p._bridge, RecordingBridge()
 p._bridge = recorder
@@ -86,18 +92,28 @@ p.sync_turn("<memory-context>recalled stuff</memory-context> which cache? passwo
 
 # A chat-app session: recall still works, but no Turn Trace is written (default
 # sync_turns_platforms is ["cli"]).
-d = type(p)()
-d.initialize("discord-session", hermes_home=os.environ["HERMES_HOME"],
-             platform="discord", agent_context="primary")
-d.handle_tool_call("blueocean_set_project", {"project": project})
-d.sync_turn("discord small talk about lunch", "Enjoy your lunch!", session_id="discord-session")
+def turn_writes(platform):
+    """memory_store calls one turn on ``platform`` makes, recorded instead of sent."""
+    s = type(p)()
+    s.initialize(platform + "-session", hermes_home=os.environ["HERMES_HOME"],
+                 platform=platform, agent_context="primary")
+    s.handle_tool_call("blueocean_set_project", {"project": project})
+    s._bridge = RecordingBridge()
+    s.sync_turn("small talk about lunch", "Enjoy your lunch!", session_id=platform + "-session")
+    return [name for name, _ in s._bridge.calls if name == "memory_store"]
+
+
+discord_writes, tui_writes = turn_writes("discord"), turn_writes("tui")
 
 # The allowlist in blueocean.json maps the alias "contractalias" to the project, so
 # naming the alias is enough: no blueocean_set_project call.
 a = type(p)()
 a.initialize("alias-session", hermes_home=os.environ["HERMES_HOME"],
              platform="cli", agent_context="primary")
+a._bridge, alias_real = RecordingBridge(), a._bridge
 alias_ignored = a.prefetch("kops vs kubeadm, which cache?", session_id="alias-session")
+alias_ignored_calls = [name for name, _ in a._bridge.calls]
+a._bridge = alias_real
 alias_recall = a.prefetch("what did contractalias decide about the cache",
                           session_id="alias-session")
 p.shutdown()
@@ -107,7 +123,8 @@ print("RESULT " + json.dumps({
     "count": status.count if status else 0,
     "label": status.provider_label if status else "",
     "second": second,
-    "alias_ignored": alias_ignored, "alias_recall": alias_recall,
+    "alias_ignored": alias_ignored, "alias_ignored_calls": alias_ignored_calls,
+    "alias_recall": alias_recall, "discord_writes": discord_writes, "tui_writes": tui_writes,
 }))
 '''
 
@@ -252,14 +269,15 @@ def main() -> None:
         assert (meta["area"], meta["module"], meta["importance"]) == ("hermes", "turns", 1)
         print("  OK")
 
-        print("== a discord session writes no Turn Trace ==")
-        lunch = bridge.call("memory_search", {"project": PROJECT, "query": "lunch",
-                                              "kind": "hermes_turn"})
-        assert all("lunch" not in r["summary"] for r in lunch["summary"]), lunch
+        print("== a discord turn writes no Turn Trace; a local (tui) turn still does ==")
+        assert out["discord_writes"] == [], out["discord_writes"]
+        assert out["tui_writes"] == ["memory_store"], out["tui_writes"]
         print("  OK")
 
         print("== the allowlist: an alias finds the project, unlisted names don't ==")
         assert out["alias_ignored"] == "", out["alias_ignored"]
+        # No search and no catalog lookup at all: kops is not on the list.
+        assert out["alias_ignored_calls"] == [], out["alias_ignored_calls"]
         assert "BlueOcean project memory - " + PROJECT in out["alias_recall"], out["alias_recall"]
         assert "Chose Redis for the cache" in out["alias_recall"]
         print("  OK")
