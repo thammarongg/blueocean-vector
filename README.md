@@ -24,6 +24,7 @@ If you've ever burned through a context window, opened a different tool, and the
 - [How it fits together](#how-it-fits-together)
 - [Getting started](#getting-started)
   - [Teaching agents to actually use it](#teaching-agents-to-actually-use-it)
+  - [Hermes: automatic recall](#hermes-automatic-recall)
   - [Alternative: stdio](#alternative-stdio-per-agent-local-process)
 - [The tools an agent gets](#the-tools-an-agent-gets)
 - [Configuration](#configuration)
@@ -151,6 +152,28 @@ It's one canonical `SKILL.md`, symlinked into each tool's own skills directory �
 
 To update an installed skill from the repository, use `./scripts/update.sh` as described in [Updating an existing installation](#updating-an-existing-installation). It compares the files and backs up the installed skill before replacing it when different. Running the installer again does not update an existing skill.
 
+### Hermes: automatic recall
+
+Every other client only reads memory when the agent decides to call `memory_search`. [Hermes](https://github.com/NousResearch/hermes-agent) can do better: it calls its active *memory provider* itself, before and after every turn. `integrations/hermes/blueocean/` is that provider.
+
+- **Before each turn** it finds which project the conversation is about and injects the relevant entries. It takes the project from a name in your message, or from Hermes's working directory, and you can correct it with the `blueocean_set_project` tool. The default budget is 600 tokens, and an entry already injected in the same session is not injected again.
+- **After each turn** it stores a **Turn Trace** (`kind=hermes_turn`, `importance=1`, area `hermes`, module `turns`). Before storing, it strips recalled memory and redacts credentials: `NAME_TOKEN=`/`*_SECRET`/`*_KEY`/`credentials`/`passphrase` assignments, quoted JSON values, Bearer and `Authorization: Basic` headers, OpenAI `sk-`, Stripe `sk_live_`/`rk_test_`, Google `AIza`, AWS `AKIA`/`ASIA`, GitHub, GitLab `glpat-`, Hugging Face `hf_`, `npm_` and Slack tokens, PEM and PGP private keys, and URL passwords. The same redaction is applied to the recall query before it is sent. Traces are excluded from every search that doesn't ask for `kind="hermes_turn"`, so they never compete with real entries.
+- Redaction is best-effort pattern matching, so don't paste secrets you can't afford to have stored. Known misses include bare JWTs, Discord and Telegram bot tokens, a password stated in prose ("my password is X", in English or Thai), `mysql -pX`, `curl -u user:pass`, and unquoted values with spaces (`password = my pass phrase` keeps `pass phrase`).
+- Explicit writes still go through the `blueocean` MCP server entry. Keep it configured.
+
+Update the server first: without the server change that hides traces, every Turn Trace would show up in every agent's default search.
+
+```bash
+./scripts/update.sh                     # rebuild the server (hides Turn Traces from default search)
+./scripts/install_hermes_plugin.sh      # symlink into ~/.hermes/plugins/blueocean
+hermes memory setup blueocean           # pick it as the memory provider
+# then restart the Hermes gateway
+```
+
+Settings (`hermes memory setup`, stored in `~/.hermes/blueocean.json`): `url`, `prefetch_max_tokens`, `ignore_projects` (globs never auto-detected; default skips test and probe projects), `sync_turns`. Old traces can be removed with `blueocean-admin prune <project> --kind hermes_turn --older-days 30`.
+
+If the server is down, recall quietly returns nothing. After one failure the provider pauses for 30 s instead of making every turn wait. A write the server did not confirm within its deadline is dropped rather than resent, so a Turn Trace is never stored twice. To roll back, set `memory.provider` back to empty.
+
 ### Alternative: stdio (per-agent local process)
 
 No Docker available, or you'd rather not run a shared server? Run:
@@ -251,6 +274,7 @@ Everything lives in `.env` (copy `.env.example` to start). The defaults work for
 - `BLUEOCEAN_QDRANT_URL` — where Qdrant lives.
 - `BLUEOCEAN_MAX_TOKENS` / `BLUEOCEAN_TOP_K` — the default search budget.
 - `BLUEOCEAN_AUTH_TOKEN` — unset by default (fine for `127.0.0.1`-only use). See [Security](#security) if you're exposing this beyond your own machine.
+- `BLUEOCEAN_TRACE_KINDS` — record kinds kept out of every search that doesn't name them with `kind=` (default `hermes_turn`, comma-separated, empty disables). Traces are written mechanically every turn; without this they would crowd real entries out of other agents' search budget.
 
 Transport (`streamable-http` vs `stdio`) is a CLI flag, not an env var — it's a "how do I run this" choice made at startup, not a persistent setting.
 
@@ -264,6 +288,7 @@ uv run blueocean-admin manifest <project>
 uv run blueocean-admin list
 uv run blueocean-admin export <project>
 uv run blueocean-admin prune <project> --older-days 90 --max-importance 2 [--dry-run]
+uv run blueocean-admin prune <project> --kind hermes_turn --older-days 30 [--dry-run]
 uv run blueocean-admin snapshot <project> [--out ./backups]
 uv run blueocean-admin restore <project> <snapshot-file> --yes
 uv run blueocean-admin generate-token --write-env
@@ -288,7 +313,14 @@ uv run python -m tests.auth
 uv run python -m tests.mcp_e2e
 uv run python -m tests.backup   # real snapshot -> delete collection -> restore cycle
 uv run python -m tests.health   # /health diagnostics + the cloud-provider self-test TTL cache
+uv run python -m tests.trace_kinds            # trace kinds excluded by default; prune --kind
+uv run python -m tests.hermes_logic           # Hermes provider: pure logic
+uv run python -m tests.hermes_bridge          # Hermes provider: bridge vs a real server
+uv run python -m tests.hermes_contract        # Hermes provider loaded by Hermes itself (skips without Hermes)
+uv run python -m tests.install_hermes_plugin
 ```
+
+`tests.hermes_contract` runs on Hermes's own dependency venv (`~/.hermes/installs/*/environments/*/venv/bin/python`, override with `HERMES_PYTHON`), never imports `hermes_bootstrap`, and fails if it changes any file in the Hermes install.
 
 `tests/auth.py` specifically checks that unauthenticated and wrong-token requests get rejected (401) and that a correct token works via both the header and the `?token=` query-param path.
 

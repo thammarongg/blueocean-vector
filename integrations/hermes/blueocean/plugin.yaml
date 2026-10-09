@@ -1,0 +1,5 @@
+name: blueocean
+version: 0.1.0
+description: "BlueOcean Vector shared project memory: per-turn recall for the project in conversation, and a Turn Trace of each turn."
+requires_env:
+  - BLUEOCEAN_AUTH_TOKEN

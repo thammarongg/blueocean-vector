@@ -23,10 +23,11 @@ from .config import (
     DEFAULT_QDRANT_URL,
     MAX_CONTENT_CHARS,
     MAX_TOP_K,
+    TRACE_KINDS,
 )
 from .embeddings import Embedder
 
-PAYLOAD_INDEX_FIELDS = ["area", "module", "importance", "timestamp"]
+PAYLOAD_INDEX_FIELDS = ["area", "module", "importance", "timestamp", "kind"]
 
 
 _PROJECT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,99}$")
@@ -147,6 +148,8 @@ class VectorStore:
             ("timestamp", qmodels.PayloadSchemaType.INTEGER),
             ("area", qmodels.PayloadSchemaType.KEYWORD),
             ("module", qmodels.PayloadSchemaType.KEYWORD),
+            # Every default search excludes the trace kinds, so it filters on kind.
+            ("kind", qmodels.PayloadSchemaType.KEYWORD),
         ]
         for field, dtype in schema:
             self._client.create_payload_index(
@@ -277,6 +280,9 @@ class VectorStore:
         exclude_kinds: list[str] | None = None,
     ) -> list[dict]:
         self._ensure_collection(project)
+        # Traces are only ever returned to a caller that names their kind.
+        if not kind:
+            exclude_kinds = [*(exclude_kinds or []), *TRACE_KINDS]
         vector = self._embedder.embed_query(query)
         # .search() was removed in qdrant-client 1.19; .query_points() is the
         # replacement (returns a QueryResponse wrapping .points).

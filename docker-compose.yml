@@ -50,6 +50,8 @@ services:
       # so blueocean-admin reads over HTTP instead.
       - BLUEOCEAN_TELEMETRY_DB=/data/telemetry.db
       - BLUEOCEAN_PRICING_FILE=/data/pricing.json
+      # Kinds hidden from searches that don't name them (comma-separated).
+      - BLUEOCEAN_TRACE_KINDS=${BLUEOCEAN_TRACE_KINDS-hermes_turn}
     ports:
       - "8765:8765"
     healthcheck:

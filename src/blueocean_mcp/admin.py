@@ -5,7 +5,7 @@ Commands:
     manifest <project>         - list areas/modules
     list                      - list projects
     export <project>           - dump all entries as JSON lines
-    prune <project> [--older-days N] [--max-importance I] [--dry-run]
+    prune <project> [--older-days N] [--max-importance I] [--kind K] [--dry-run]
                                - delete low-importance + old entries
     snapshot <project> [--out DIR]
                                - point-in-time backup (vectors included),
@@ -100,6 +100,11 @@ def cmd_export(args: argparse.Namespace) -> None:
 
 
 def cmd_prune(args: argparse.Namespace) -> None:
+    kind = getattr(args, "kind", None)
+    if kind is not None and not str(kind).strip():
+        # A blank kind would drop out of the filter and widen the prune to every kind
+        # (`--kind "$K"` with K unset). main() rejects it too; this guards other callers.
+        raise ValueError("prune: kind must not be blank")
     client = _client()
     name = collection_name(args.project)
     now = int(time.time())
@@ -121,8 +126,12 @@ def cmd_prune(args: argparse.Namespace) -> None:
                 range=qmodels.Range(lte=max_importance),
             )
         )
+    if kind:
+        must.append(
+            qmodels.FieldCondition(key="kind", match=qmodels.MatchValue(value=kind))
+        )
     if not must:
-        print("Nothing to prune: provide --older-days and/or --max-importance.")
+        print("Nothing to prune: provide --older-days, --max-importance and/or --kind.")
         return
 
     flt = qmodels.Filter(must=must) if must else None
@@ -425,6 +434,8 @@ def main() -> None:
     p_prune.add_argument("project")
     p_prune.add_argument("--older-days", type=int, default=None)
     p_prune.add_argument("--max-importance", type=int, default=None)
+    p_prune.add_argument("--kind", default=None,
+                         help="only entries of this kind (e.g. hermes_turn)")
     p_prune.add_argument("--dry-run", action="store_true")
     p_prune.set_defaults(func=cmd_prune)
 
@@ -469,6 +480,9 @@ def main() -> None:
     p_token.set_defaults(func=cmd_generate_token)
 
     args = parser.parse_args()
+    if args.command == "prune" and args.kind is not None and not args.kind.strip():
+        p_prune.error("--kind must not be blank (an unset variable?); "
+                      "omit --kind to prune every kind")
     args.func(args)
 
 
