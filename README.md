@@ -157,7 +157,7 @@ To update an installed skill from the repository, use `./scripts/update.sh` as d
 Every other client only reads memory when the agent decides to call `memory_search`. [Hermes](https://github.com/NousResearch/hermes-agent) can do better: it calls its active *memory provider* itself, before and after every turn. `integrations/hermes/blueocean/` is that provider.
 
 - **Before each turn** it finds which project the conversation is about and injects the relevant entries. It takes the project from a name in your message, or from Hermes's working directory, and you can correct it with the `blueocean_set_project` tool. The default budget is 600 tokens, and an entry already injected in the same session is not injected again.
-- **After each turn** it stores a **Turn Trace** (`kind=hermes_turn`, `importance=1`, area `hermes`, module `turns`). Before storing, it strips recalled memory and redacts credentials: `NAME_TOKEN=`/`*_SECRET`/`*_KEY`/`credentials`/`passphrase` assignments, quoted JSON values, Bearer and `Authorization: Basic` headers, OpenAI `sk-`, Stripe `sk_live_`/`rk_test_`, Google `AIza`, AWS `AKIA`/`ASIA`, GitHub, GitLab `glpat-`, Hugging Face `hf_`, `npm_` and Slack tokens, PEM and PGP private keys, and URL passwords. The same redaction is applied to the recall query before it is sent. Traces are excluded from every search that doesn't ask for `kind="hermes_turn"`, so they never compete with real entries.
+- **After each turn** on a platform listed in `sync_turns_platforms` (default: Hermes's local sessions `cli`, `tui`, `desktop` and `acp`; Discord, Telegram and other chat apps are left out, so casual talk never reaches the store every agent reads) it stores a **Turn Trace** (`kind=hermes_turn`, `importance=1`, area `hermes`, module `turns`). Before storing, it strips recalled memory and redacts credentials: `NAME_TOKEN=`/`*_SECRET`/`*_KEY`/`credentials`/`passphrase` assignments, quoted JSON values, Bearer and `Authorization: Basic` headers, OpenAI `sk-`, Stripe `sk_live_`/`rk_test_`, Google `AIza`, AWS `AKIA`/`ASIA`, GitHub, GitLab `glpat-`, Hugging Face `hf_`, `npm_` and Slack tokens, PEM and PGP private keys, and URL passwords. The same redaction is applied to the recall query before it is sent. Traces are excluded from every search that doesn't ask for `kind="hermes_turn"`, so they never compete with real entries.
 - Redaction is best-effort pattern matching, so don't paste secrets you can't afford to have stored. Known misses include bare JWTs, Discord and Telegram bot tokens, a password stated in prose ("my password is X", in English or Thai), `mysql -pX`, `curl -u user:pass`, and unquoted values with spaces (`password = my pass phrase` keeps `pass phrase`).
 - Explicit writes still go through the `blueocean` MCP server entry. Keep it configured.
 
@@ -170,7 +170,18 @@ hermes memory setup blueocean           # pick it as the memory provider
 # then restart the Hermes gateway
 ```
 
-Settings (`hermes memory setup`, stored in `~/.hermes/blueocean.json`): `url`, `prefetch_max_tokens`, `ignore_projects` (globs never auto-detected; default skips test and probe projects), `sync_turns`. Old traces can be removed with `blueocean-admin prune <project> --kind hermes_turn --older-days 30`.
+Settings (`hermes memory setup`, stored in `~/.hermes/blueocean.json`): `url`, `prefetch_max_tokens`, `ignore_projects` (globs never auto-detected; default skips test and probe projects), `sync_turns`, `sync_turns_platforms`, and `projects`.
+
+`projects` is an allowlist with aliases. Without it, any project in the store can be picked up from a message, including ones named like ordinary words (`kubernetes`, `kops`), and a picked project stays active for the rest of the session. With it, only the listed projects and their aliases are detected, `ignore_projects` no longer applies, and Hermes's working directory only counts when it is a listed name or alias. A plain list (`["blueocean-vector", "tidepool"]`) means projects without aliases; a listed name the server would reject is skipped:
+
+```json
+{
+  "projects": {"blueocean-vector": ["blueocean"], "thalassaops": [], "tidepool": []},
+  "sync_turns_platforms": ["cli", "tui", "desktop", "acp"]
+}
+```
+
+In `hermes memory setup` the same allowlist is typed as `blueocean-vector:blueocean|bo, thalassaops, tidepool` (`|` separates aliases) and stored as that text. A blank answer keeps the current value; edit `~/.hermes/blueocean.json` to clear it. `blueocean_set_project` can still choose any valid project explicitly. Old traces can be removed with `blueocean-admin prune <project> --kind hermes_turn --older-days 30`.
 
 If the server is down, recall quietly returns nothing. After one failure the provider pauses for 30 s instead of making every turn wait. A write the server did not confirm within its deadline is dropped rather than resent, so a Turn Trace is never stored twice. To roll back, set `memory.provider` back to empty.
 
