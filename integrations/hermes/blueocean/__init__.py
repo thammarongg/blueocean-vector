@@ -33,6 +33,7 @@ from .config import DEFAULTS, ignore_globs, load_config, save_config
 from .project import (
     ProjectCatalog,
     ProjectTracker,
+    alias_map,
     suggest_project_name,
     valid_project_name,
 )
@@ -158,6 +159,13 @@ class BlueOceanMemoryProvider(MemoryProvider):
              "default": DEFAULTS["ignore_projects"]},
             {"key": "sync_turns", "description": "Store each turn as a Turn Trace",
              "type": "boolean", "default": DEFAULTS["sync_turns"]},
+            {"key": "sync_turns_platforms",
+             "description": "Comma-separated platforms whose turns are stored (e.g. cli,telegram)",
+             "default": ",".join(DEFAULTS["sync_turns_platforms"])},
+            {"key": "projects",
+             "description": ("Projects that may be auto-detected, with aliases, e.g. "
+                             "'blueocean-vector:blueocean|bo, tidepool' (empty = any project)"),
+             "default": ""},
         ]
 
     def save_config(self, values: dict[str, Any], hermes_home: str) -> None:
@@ -203,14 +211,21 @@ class BlueOceanMemoryProvider(MemoryProvider):
         return list(result.get("projects", [])) if isinstance(result, dict) else []
 
     def _resolve_project(self, key: str, query: str) -> str | None:
-        known = self._catalog.names()
-        ignore = ignore_globs(self._config["ignore_projects"])
-        active = self._tracker.observe(key, query, known, ignore)
         cwd = self._cwd_project
-        if (active is None and cwd and cwd in known
-                and not any(fnmatch.fnmatchcase(cwd, glob) for glob in ignore)):
-            self._tracker.set_active(key, cwd)
-            active = cwd
+        if self._config["projects"]:
+            # Allowlist: only listed projects and their aliases; the store is not consulted.
+            allowed = alias_map(self._config["projects"])
+            active = self._tracker.observe(key, query, (), (), allowed=allowed)
+            default = allowed.get(cwd.lower()) if cwd else None
+        else:
+            known = self._catalog.names()
+            ignore = ignore_globs(self._config["ignore_projects"])
+            active = self._tracker.observe(key, query, known, ignore)
+            default = (cwd if cwd and cwd in known
+                       and not any(fnmatch.fnmatchcase(cwd, glob) for glob in ignore) else None)
+        if active is None and default:
+            self._tracker.set_active(key, default)
+            active = default
         return active
 
     def prefetch(self, query: str, *, session_id: str = "") -> str:
@@ -257,7 +272,8 @@ class BlueOceanMemoryProvider(MemoryProvider):
                   session_id: str = "", messages: list[dict[str, Any]] | None = None) -> None:
         try:
             if (self._bridge is None or self._agent_context != "primary"
-                    or not self._config["sync_turns"]):
+                    or not self._config["sync_turns"]
+                    or (self._platform or "cli").lower() not in self._config["sync_turns_platforms"]):
                 return
             project = self._tracker.active(self._key(session_id))
             if not project:

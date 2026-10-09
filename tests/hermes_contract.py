@@ -83,6 +83,23 @@ p._bridge = real_bridge
 sent_queries = [args["query"] for name, args in recorder.calls if name == "memory_search"]
 p.sync_turn("<memory-context>recalled stuff</memory-context> which cache? password=hunter2",
             "We chose Redis.", session_id="contract-session")
+
+# A chat-app session: recall still works, but no Turn Trace is written (default
+# sync_turns_platforms is ["cli"]).
+d = type(p)()
+d.initialize("discord-session", hermes_home=os.environ["HERMES_HOME"],
+             platform="discord", agent_context="primary")
+d.handle_tool_call("blueocean_set_project", {"project": project})
+d.sync_turn("discord small talk about lunch", "Enjoy your lunch!", session_id="discord-session")
+
+# The allowlist in blueocean.json maps the alias "contractalias" to the project, so
+# naming the alias is enough: no blueocean_set_project call.
+a = type(p)()
+a.initialize("alias-session", hermes_home=os.environ["HERMES_HOME"],
+             platform="cli", agent_context="primary")
+alias_ignored = a.prefetch("kops vs kubeadm, which cache?", session_id="alias-session")
+alias_recall = a.prefetch("what did contractalias decide about the cache",
+                          session_id="alias-session")
 p.shutdown()
 print("RESULT " + json.dumps({
     "trivial": trivial, "set": set_out, "set_upper": set_upper, "set_bad": set_bad,
@@ -90,6 +107,7 @@ print("RESULT " + json.dumps({
     "count": status.count if status else 0,
     "label": status.provider_label if status else "",
     "second": second,
+    "alias_ignored": alias_ignored, "alias_recall": alias_recall,
 }))
 '''
 
@@ -169,7 +187,8 @@ def main() -> None:
         with tempfile.TemporaryDirectory() as home:
             (Path(home) / "plugins").mkdir()
             (Path(home) / "plugins" / "blueocean").symlink_to(PLUGIN_DIR)
-            (Path(home) / "blueocean.json").write_text(json.dumps({"url": URL}))
+            (Path(home) / "blueocean.json").write_text(json.dumps(
+                {"url": URL, "projects": {PROJECT: ["contractalias"]}}))
             env = {**os.environ, "HERMES_HOME": home, "HERMES_AGENT_DIR": str(HERMES_AGENT_DIR),
                    "BLUEOCEAN_AUTH_TOKEN": TOKEN, "CONTRACT_PROJECT": PROJECT,
                    "HERMES_DISABLE_LAZY_INSTALLS": "1"}
@@ -231,6 +250,18 @@ def main() -> None:
         assert "hunter2" not in content, "a password was stored"
         meta = traces["summary"][0]["metadata"]
         assert (meta["area"], meta["module"], meta["importance"]) == ("hermes", "turns", 1)
+        print("  OK")
+
+        print("== a discord session writes no Turn Trace ==")
+        lunch = bridge.call("memory_search", {"project": PROJECT, "query": "lunch",
+                                              "kind": "hermes_turn"})
+        assert all("lunch" not in r["summary"] for r in lunch["summary"]), lunch
+        print("  OK")
+
+        print("== the allowlist: an alias finds the project, unlisted names don't ==")
+        assert out["alias_ignored"] == "", out["alias_ignored"]
+        assert "BlueOcean project memory - " + PROJECT in out["alias_recall"], out["alias_recall"]
+        assert "Chose Redis for the cache" in out["alias_recall"]
         print("  OK")
 
         print("== the trace stays out of default search ==")

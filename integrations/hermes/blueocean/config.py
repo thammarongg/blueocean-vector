@@ -18,6 +18,12 @@ DEFAULTS: dict[str, Any] = {
     "prefetch_max_tokens": 600,
     "ignore_projects": "*test*,*-project,probe-*,*-probe",
     "sync_turns": True,
+    # Projects that may be auto-detected, each with its aliases. Empty = any project in
+    # the store except ignore_projects; once set, only these (and their aliases).
+    "projects": {},
+    # Platforms whose turns are stored as Turn Traces. Chat apps are left out by
+    # default: casual and personal talk does not belong in the store every agent reads.
+    "sync_turns_platforms": ["cli"],
 }
 
 _MIN_TOKENS, _MAX_TOKENS = 100, 2000
@@ -53,6 +59,8 @@ def load_config(hermes_home: str | Path) -> dict[str, Any]:
     cfg.update({k: v for k, v in raw.items() if k in DEFAULTS and v is not None})
     cfg["prefetch_max_tokens"] = _clamp_tokens(cfg["prefetch_max_tokens"])
     cfg["sync_turns"] = _as_bool(cfg["sync_turns"])
+    cfg["projects"] = parse_projects(cfg["projects"])
+    cfg["sync_turns_platforms"] = parse_platforms(cfg["sync_turns_platforms"])
     return cfg
 
 
@@ -71,3 +79,34 @@ def ignore_globs(value: str | list[str] | None) -> list[str]:
     """``ignore_projects`` as a list, from either a comma string or a list."""
     parts = value.split(",") if isinstance(value, str) else list(value or [])
     return [str(p).strip() for p in parts if str(p).strip()]
+
+
+def parse_platforms(value: str | list[str] | None) -> list[str]:
+    """``sync_turns_platforms`` as lowercase names, from a comma string or a list."""
+    return [p.lower() for p in ignore_globs(value)]
+
+
+def _names(value: Any) -> list[str]:
+    parts = value.split("|") if isinstance(value, str) else value
+    if not isinstance(parts, list):
+        return []
+    return [str(p).strip().lower() for p in parts if str(p).strip()]
+
+
+def parse_projects(value: Any) -> dict[str, list[str]]:
+    """``projects`` as {project: [aliases]}, lowercased.
+
+    JSON holds a dict (aliases as a list or an ``a|b`` string). ``hermes memory setup``
+    can only collect text, so ``"blueocean-vector:blueocean|bo, tidepool"`` works too.
+    Anything else means no allowlist.
+    """
+    if isinstance(value, str):
+        value = dict(item.partition(":")[::2] for item in value.split(","))
+    if not isinstance(value, dict):
+        return {}
+    projects: dict[str, list[str]] = {}
+    for name, aliases in value.items():
+        key = str(name).strip().lower()
+        if key:
+            projects[key] = _names(aliases)
+    return projects

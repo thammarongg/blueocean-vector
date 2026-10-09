@@ -3,7 +3,9 @@
 Hermes runs across many repositories and its gateway has no working
 directory, so the project is detected from the conversation. The latest
 signal wins: a cwd default, a project named in a message, or an explicit
-tool call. Whatever was set last stays active for later turns.
+tool call. Whatever was set last stays active for later turns. A configured
+allowlist (with aliases) narrows what a message can select: on a chat app,
+a project named like an ordinary word ("kubernetes") would otherwise stick.
 
 Names match on a lookaround boundary rather than ``\\b``: Python counts Thai
 letters as word characters, so ``\\b`` finds no boundary in ``ดูkops``.
@@ -42,17 +44,33 @@ def suggest_project_name(name: str) -> str | None:
     return slug if valid_project_name(slug) else None
 
 
-def match_project(message: str | None, known: Iterable[str], ignore: Sequence[str]) -> str | None:
-    """The longest known project named in ``message``, or None."""
+def alias_map(projects: dict[str, list[str]]) -> dict[str, str]:
+    """Every name that detects a project (the project itself and its aliases) -> project."""
+    names: dict[str, str] = {}
+    for project, aliases in projects.items():
+        names[project] = project
+        for alias in aliases:
+            names.setdefault(alias, project)
+    return names
+
+
+def match_alias(message: str | None, names: dict[str, str]) -> str | None:
+    """The project whose longest name or alias appears in ``message``, or None."""
     text = message or ""
     best: str | None = None
-    for name in sorted(known):
-        if not name or any(fnmatch.fnmatchcase(name, g) for g in ignore):
+    for name in sorted(names):
+        if not name:
             continue
         pattern = rf"(?<!{_NAME_CHAR}){re.escape(name)}(?!{_NAME_CHAR})"
         if re.search(pattern, text, re.IGNORECASE) and (best is None or len(name) > len(best)):
             best = name
-    return best
+    return names[best] if best is not None else None
+
+
+def match_project(message: str | None, known: Iterable[str], ignore: Sequence[str]) -> str | None:
+    """The longest known project named in ``message``, or None."""
+    names = {n: n for n in known if n and not any(fnmatch.fnmatchcase(n, g) for g in ignore)}
+    return match_alias(message, names)
 
 
 @dataclass
@@ -81,8 +99,12 @@ class ProjectTracker:
             self._state(key).project = project
 
     def observe(self, key: str, message: str | None, known: Iterable[str],
-                ignore: Sequence[str]) -> str | None:
-        hit = match_project(message, known, ignore)
+                ignore: Sequence[str], *, allowed: dict[str, str] | None = None) -> str | None:
+        """Switch to a project named in ``message``. With ``allowed`` (an
+        :func:`alias_map`), only those names and aliases count; ``known`` and
+        ``ignore`` apply otherwise."""
+        hit = (match_alias(message, allowed) if allowed is not None
+               else match_project(message, known, ignore))
         with self._lock:
             state = self._state(key)
             if hit:

@@ -407,8 +407,68 @@ def test_catalog() -> None:
     print("  OK")
 
 
+def test_project_settings() -> None:
+    print("== config: projects allowlist with aliases, sync_turns_platforms ==")
+    assert config.DEFAULTS["projects"] == {}, "no allowlist by default: behavior unchanged"
+    assert config.DEFAULTS["sync_turns_platforms"] == ["cli"], "Turn Traces off on chat apps"
+
+    # The text form is what `hermes memory setup` can collect; JSON can hold the dict.
+    text_form = "blueocean-vector:blueocean|bo, Thalassaops ,tidepool:"
+    assert config.parse_projects(text_form) == {
+        "blueocean-vector": ["blueocean", "bo"], "thalassaops": [], "tidepool": []}
+    assert config.parse_projects({"Blueocean-Vector": ["BlueOcean", " "], "x": "a|b"}) == {
+        "blueocean-vector": ["blueocean"], "x": ["a", "b"]}
+    for junk in (None, 42, "", ":alias", {"": ["a"]}, ["blueocean-vector"]):
+        assert config.parse_projects(junk) == {}, f"junk must parse to no allowlist: {junk!r}"
+    assert config.parse_platforms("cli, Discord ,,") == ["cli", "discord"]
+    assert config.parse_platforms(["CLI"]) == ["cli"]
+    assert config.parse_platforms("") == [], "an empty list means no platform writes traces"
+
+    with tempfile.TemporaryDirectory() as home:
+        config.save_config({"projects": "blueocean-vector:blueocean",
+                            "sync_turns_platforms": "cli,telegram"}, home)
+        loaded = config.load_config(home)
+        assert loaded["projects"] == {"blueocean-vector": ["blueocean"]}
+        assert loaded["sync_turns_platforms"] == ["cli", "telegram"]
+        (Path(home) / config.CONFIG_FILE).write_text(json.dumps(
+            {"projects": {"blueocean-vector": ["blueocean"]}, "sync_turns_platforms": []}))
+        loaded = config.load_config(home)
+        assert loaded["projects"] == {"blueocean-vector": ["blueocean"]}
+        assert loaded["sync_turns_platforms"] == []
+    print("  OK")
+
+
+def test_alias_matching() -> None:
+    print("== project: an allowlist limits detection, aliases resolve to their project ==")
+    allowed = project.alias_map({"blueocean-vector": ["blueocean", "bo"], "tidepool": []})
+    assert allowed == {"blueocean-vector": "blueocean-vector", "blueocean": "blueocean-vector",
+                       "bo": "blueocean-vector", "tidepool": "tidepool"}
+    cases = {
+        "update blueocean ให้เป็น hermes memory provider": "blueocean-vector",
+        "ดูblueoceanหน่อย": "blueocean-vector",  # Thai glued on both sides
+        "BlueOcean-Vector status?": "blueocean-vector",
+        "tidepool and blueocean": "blueocean-vector",  # longest name wins
+        "ช่วยเช็ค kubernetes cluster ใน Magnum หน่อย": None,  # not on the list
+        "Kops กับ kubeadm ต่างกันยังไง": None,
+        "bobcat": None,  # an alias never matches inside a word
+        "": None,
+    }
+    for message, expected in cases.items():
+        got = project.match_alias(message, allowed)
+        assert got == expected, f"{message!r}: expected {expected!r}, got {got!r}"
+
+    t = project.ProjectTracker()
+    known = ["kops", "kubernetes", "blueocean-vector"]
+    assert t.observe("s", "kops vs kubeadm", known, [], allowed=allowed) is None
+    assert t.observe("s", "back to blueocean", known, [], allowed=allowed) == "blueocean-vector"
+    assert t.observe("s", "and kubernetes?", known, [], allowed=allowed) == "blueocean-vector"
+    print("  OK")
+
+
 def main() -> None:
     test_config()
+    test_project_settings()
+    test_alias_matching()
     test_fence_and_redaction()
     test_redaction_gaps()
     test_redaction_formats()
