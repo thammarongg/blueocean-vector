@@ -45,6 +45,10 @@ services:
       # root. Empty/unset = no auth. Generate one with:
       #   uv run blueocean-admin generate-token --write-env
       - BLUEOCEAN_AUTH_TOKEN=${BLUEOCEAN_AUTH_TOKEN:-}
+      # HTTPS, as paths inside the container (./data is /data). Both or
+      # neither; empty/unset = plain HTTP. See "TLS" in the README.
+      - BLUEOCEAN_TLS_CERTFILE=${BLUEOCEAN_TLS_CERTFILE:-}
+      - BLUEOCEAN_TLS_KEYFILE=${BLUEOCEAN_TLS_KEYFILE:-}
       # Both files live in the bind mount, and the SERVER is the only process
       # that opens them: SQLite locking is not dependable across this mount,
       # so blueocean-admin reads over HTTP instead.
@@ -57,10 +61,12 @@ services:
     healthcheck:
       # /health is a real readiness check (also verifies Qdrant is
       # reachable), not just "the process is alive". It's deliberately
-      # unauthenticated -- see src/blueocean_mcp/health.py.
+      # unauthenticated -- see src/blueocean_mcp/health.py. Under TLS it skips
+      # certificate checks: the certificate names the public host, not
+      # localhost, and this loopback probe sends no secret.
       test: [
         "CMD", "python3", "-c",
-        "import urllib.request; urllib.request.urlopen('http://localhost:8765/health', timeout=3)"
+        "import os, ssl, urllib.request as u; tls = os.getenv('BLUEOCEAN_TLS_CERTFILE'); u.urlopen(('https' if tls else 'http') + '://localhost:8765/health', timeout=3, context=ssl._create_unverified_context() if tls else None)"
       ]
       interval: 10s
       timeout: 5s

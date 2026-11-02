@@ -21,6 +21,7 @@ import asyncio
 import concurrent.futures
 import json
 import logging
+import ssl
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -97,10 +98,25 @@ def _leaves(exc: BaseException) -> Iterator[BaseException]:
         yield exc
 
 
+def _is_untrusted_certificate(exc: BaseException) -> bool:
+    """Whether the cause is certificate verification. By type: the message text
+    differs by platform, and the HTTP client wraps the SSL error in its own."""
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        if isinstance(current, ssl.SSLCertVerificationError):
+            return True
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    return False
+
+
 def describe(exc: BaseException, url: str) -> str:
     """A log-ready reason. The MCP client reports a 401 only as MCPError."""
     leaves = list(_leaves(exc))
     names = {type(e).__name__ for e in leaves}
+    if any(_is_untrusted_certificate(e) for e in leaves):
+        return f"BlueOcean's TLS certificate is not trusted at {url} (check SSL_CERT_FILE)"
     if "ConnectError" in names or any(isinstance(e, OSError) for e in leaves):
         return f"BlueOcean unreachable at {url}"
     if "MCPError" in names:

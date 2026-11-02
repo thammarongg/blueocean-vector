@@ -285,6 +285,7 @@ Everything lives in `.env` (copy `.env.example` to start). The defaults work for
 - `BLUEOCEAN_QDRANT_URL` — where Qdrant lives.
 - `BLUEOCEAN_MAX_TOKENS` / `BLUEOCEAN_TOP_K` — the default search budget.
 - `BLUEOCEAN_AUTH_TOKEN` — unset by default (fine for `127.0.0.1`-only use). See [Security](#security) if you're exposing this beyond your own machine.
+- `BLUEOCEAN_TLS_CERTFILE` / `BLUEOCEAN_TLS_KEYFILE` — serve HTTPS with this certificate and key. Unset by default (plain HTTP). See [TLS](#tls).
 - `BLUEOCEAN_TRACE_KINDS` — record kinds kept out of every search that doesn't name them with `kind=` (default `hermes_turn`, comma-separated, empty disables). Traces are written mechanically every turn; without this they would crowd real entries out of other agents' search budget.
 
 Transport (`streamable-http` vs `stdio`) is a CLI flag, not an env var — it's a "how do I run this" choice made at startup, not a persistent setting.
@@ -321,6 +322,7 @@ Test files under `tests/` are standalone scripts (`if __name__ == "__main__":`),
 ```bash
 uv run python -m tests.smoke
 uv run python -m tests.auth
+uv run python -m tests.tls_transport   # HTTPS end to end, bad certificate settings, the compose healthcheck
 uv run python -m tests.mcp_e2e
 uv run python -m tests.backup   # real snapshot -> delete collection -> restore cycle
 uv run python -m tests.health   # /health diagnostics + the cloud-provider self-test TTL cache
@@ -387,7 +389,7 @@ not forged.
 No auth by default — reasonable for `127.0.0.1`-only local use, not reasonable the moment this is reachable from anywhere else.
 
 > [!IMPORTANT]
-> If you expose this server beyond localhost (a shared machine, the cloud), set `BLUEOCEAN_AUTH_TOKEN` before you do anything else.
+> If you expose this server beyond localhost (a shared machine, the cloud), set `BLUEOCEAN_AUTH_TOKEN` before you do anything else, and serve it over [TLS](#tls). Without TLS the token and everything you store cross the network in the clear.
 
 ```bash
 uv run blueocean-admin generate-token --write-env
@@ -410,6 +412,56 @@ Not every tool can set a custom header when registering a remote server by URL, 
 
 Set the token via `BLUEOCEAN_AUTH_TOKEN` (env var / `.env`), not the `--auth-token` CLI flag — a value passed as a CLI argument is visible to any other local user via `ps`. Request access logging is also off by default (`access_log=False`), since three of the five supported clients send the token as `?token=...` and a plain access log would put it in plaintext in your logs on every single request.
 
+### TLS
+
+Plain HTTP is the default and is fine on `127.0.0.1`. To reach the server across a network, either give it a certificate as below, or keep it private behind a reverse proxy that terminates TLS. TLS protects the `?token=` URLs on the wire, but the token still sits in each client's own config.
+
+```bash
+uv run blueocean-mcp --transport streamable-http --host 0.0.0.0 \
+  --tls-certfile fullchain.pem --tls-keyfile privkey.pem
+```
+
+Under Docker Compose, put the files in `./data/tls/` (ignored by git, and visible in the container as `/data/tls/`), then add the container's paths to `.env`:
+
+```bash
+BLUEOCEAN_TLS_CERTFILE=/data/tls/fullchain.pem
+BLUEOCEAN_TLS_KEYFILE=/data/tls/privkey.pem
+```
+
+```bash
+docker compose up -d --force-recreate blueocean-mcp
+```
+
+The container runs as uid 10001, which must be able to read the key: on Linux, `sudo chown -R 10001:10001 data/tls`. The healthcheck switches to HTTPS by itself. It skips certificate checks because the certificate names your public host rather than `localhost`, and the probe stays inside the container and sends no secret.
+
+The port serves HTTPS only, so everything pointing at the old `http://` URL has to change:
+
+```bash
+BLUEOCEAN_URL=https://memory.example.com:8765/mcp ./scripts/register_mcp.sh
+export BLUEOCEAN_SERVER_URL=https://memory.example.com:8765   # blueocean-admin
+```
+
+For Hermes, set `url` in `~/.hermes/blueocean.json`.
+
+**How it behaves:**
+
+- Set both files or neither. A missing file, a key that doesn't match the certificate, or only one of the two stops the server at startup. It never falls back to plain HTTP.
+- The key must be unencrypted: nothing could type a passphrase when a container starts. Protect it with file permissions.
+- Certificates are read once at startup, so restart after renewing one: `docker compose restart blueocean-mcp`.
+- Bound to `127.0.0.1`, `localhost` or `::1`, the server only accepts those names in the `Host` header (DNS rebinding protection) and answers anything else with a 421. To use a certificate for another name, bind to a non-loopback address, as Docker does.
+- Not included: client certificates (mTLS), automatic renewal, and redirecting HTTP to HTTPS.
+
+**Clients and private CAs.** A certificate from a public CA needs no client setup, which makes it the practical choice when several tools connect. A private CA or self-signed certificate has to be trusted by each client separately:
+
+| Client | How it trusts a private CA |
+|---|---|
+| `blueocean-admin` | `SSL_CERT_FILE=/path/to/ca.pem`, set when you run it. |
+| Hermes | The OS trust store, or `SSL_CERT_FILE`. That variable replaces the default roots for the whole Hermes process, so point it at a bundle that also holds the public CAs, or its other HTTPS calls will fail. |
+| Claude Code | `NODE_EXTRA_CA_CERTS=/path/to/ca.pem`. This is from Claude Code's documentation and not covered by this repo's tests. |
+| Codex, Gemini, Kiro, Cursor | Each has its own mechanism, if any: check its documentation. |
+
+There is deliberately no option to skip certificate verification. It would send the token to anyone who can intercept the connection.
+
 ---
 
 ## Deploying beyond localhost
@@ -424,6 +476,8 @@ readinessProbe:
 livenessProbe:
   httpGet: { path: /health, port: 8765 }
 ```
+
+With [TLS](#tls) on, add `scheme: HTTPS` to both `httpGet` blocks.
 
 **Linux bind-mount ownership.** The container runs as uid 10001 (`appuser` in the `Dockerfile`) and writes its telemetry database and pricing file into the `./data` bind mount. On macOS, Docker Desktop maps bind-mount ownership to the host user, so this is invisible. On Linux the container's uid is the file's uid, and a `./data` directory created by your normal user (typically uid 1000) is not writable by 10001. Create and hand over the directory **before** the first `docker compose up`:
 

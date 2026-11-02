@@ -11,6 +11,8 @@ wheels/
 
 # Environment / secrets
 .env
+*.pem
+*.key
 
 # Editor
 .DS_Store
