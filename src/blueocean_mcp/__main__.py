@@ -3,9 +3,12 @@ import os
 
 from .config import DEFAULT_QDRANT_URL
 from .server import build_server
+from .tls import TLSConfigError, TLSFiles, load_tls_files, transport_security_for
 
 
-def _serve_http(mcp, host: str, port: int, token: str | None, qdrant_url: str) -> None:
+def _serve_http(
+    mcp, host: str, port: int, token: str | None, qdrant_url: str, tls: TLSFiles | None
+) -> None:
     """Run the streamable-http transport ourselves (instead of mcp.run()) so
     we can wrap the ASGI app with bearer-token auth and add an unauthenticated
     /health route. This mirrors what MCPServer.run_streamable_http_async()
@@ -26,7 +29,9 @@ def _serve_http(mcp, host: str, port: int, token: str | None, qdrant_url: str) -
     async def _run() -> None:
         embedding_provider = os.getenv("BLUEOCEAN_EMBEDDING", "fastembed")
         embedding_model = resolve_embedding_model(embedding_provider)
-        mcp_app = mcp.streamable_http_app(host=host)
+        mcp_app = mcp.streamable_http_app(
+            host=host, transport_security=transport_security_for(host, tls)
+        )
         mcp_app.router.routes.insert(
             0,
             Route(
@@ -55,6 +60,8 @@ def _serve_http(mcp, host: str, port: int, token: str | None, qdrant_url: str) -
             port=port,
             log_level=mcp.settings.log_level.lower(),
             access_log=False,
+            ssl_certfile=tls.certfile if tls else None,
+            ssl_keyfile=tls.keyfile if tls else None,
         )
         server = uvicorn.Server(config)
         try:
@@ -112,7 +119,38 @@ def main() -> None:
             "passed here is visible to any other local user via `ps`."
         ),
     )
+    parser.add_argument(
+        "--tls-certfile",
+        default=None,
+        help=(
+            "Serve streamable-http over HTTPS with this PEM certificate chain "
+            "(default: BLUEOCEAN_TLS_CERTFILE env var, or plain HTTP if unset). "
+            "Requires --tls-keyfile."
+        ),
+    )
+    parser.add_argument(
+        "--tls-keyfile",
+        default=None,
+        help=(
+            "Unencrypted PEM private key for --tls-certfile "
+            "(default: BLUEOCEAN_TLS_KEYFILE env var)."
+        ),
+    )
     args = parser.parse_args()
+
+    # Checked before build_server(), which loads the embedding model: a wrong
+    # path should cost seconds, not a model load.
+    tls = None
+    if args.transport == "streamable-http":
+        try:
+            tls = load_tls_files(
+                args.tls_certfile or os.getenv("BLUEOCEAN_TLS_CERTFILE"),
+                args.tls_keyfile or os.getenv("BLUEOCEAN_TLS_KEYFILE"),
+            )
+        except TLSConfigError as e:
+            parser.error(str(e))
+    elif args.tls_certfile or args.tls_keyfile:
+        parser.error("--tls-certfile and --tls-keyfile apply to streamable-http, not stdio")
 
     # CLI flags take precedence over any pre-existing environment variables.
     if args.qdrant_url:
@@ -124,7 +162,7 @@ def main() -> None:
     if args.transport == "streamable-http":
         token = args.auth_token or os.getenv("BLUEOCEAN_AUTH_TOKEN")
         qdrant_url = args.qdrant_url or os.getenv("BLUEOCEAN_QDRANT_URL", DEFAULT_QDRANT_URL)
-        _serve_http(mcp, args.host, args.port, token, qdrant_url)
+        _serve_http(mcp, args.host, args.port, token, qdrant_url, tls)
     else:
         mcp.run(transport="stdio")
 
