@@ -32,14 +32,14 @@ def load_plugin_module(name: str) -> ModuleType:
     return module
 
 
-def start_server(port: int, token: str) -> subprocess.Popen:
+def start_server(port: int, token: str, extra_env: dict[str, str] | None = None) -> subprocess.Popen:
     """A real BlueOcean server over streamable HTTP, requiring ``token``.
 
     The token goes in through the environment, not --auth-token, which `ps`
     would show to other local users.
     """
     log = tempfile.TemporaryFile(mode="w+")  # noqa: SIM115 - outlives this call; stop_server closes it
-    env = {**os.environ, "BLUEOCEAN_AUTH_TOKEN": token}
+    env = {**os.environ, "BLUEOCEAN_AUTH_TOKEN": token, **(extra_env or {})}
     proc = subprocess.Popen(
         [BIN, "--transport", "streamable-http", "--host", "127.0.0.1", "--port", str(port)],
         stdout=subprocess.DEVNULL, stderr=log, env=env, text=True,

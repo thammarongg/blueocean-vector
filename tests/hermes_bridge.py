@@ -14,7 +14,10 @@ Run with:
 
 import asyncio
 import concurrent.futures
+import sqlite3
+import tempfile
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 from ._helpers import reset_project
@@ -65,6 +68,25 @@ def test_round_trip(proc_url: str) -> None:
     traces = b.call("memory_search", {"project": PROJECT, "query": "cache redis",
                                       "kind": "hermes_turn"})
     assert len(traces["summary"]) == 1, traces
+    print("  OK")
+
+
+def test_bridge_names_itself(db_file: Path) -> None:
+    """Without a client name the SDK sends its default, "mcp", and the live
+    telemetry showed 145 calls under that name that nobody could attribute."""
+    print("== the bridge's calls are recorded under its own name ==")
+    deadline = time.time() + 10
+    names: set = set()
+    while time.time() < deadline:
+        try:
+            with sqlite3.connect(db_file) as reader:
+                names = {r[0] for r in reader.execute("SELECT agent_name FROM events")}
+        except sqlite3.OperationalError:
+            names = set()
+        if names:
+            break
+        time.sleep(0.3)
+    assert names == {"blueocean-hermes-provider"}, names
     print("  OK")
 
 
@@ -396,15 +418,19 @@ def main() -> None:
     test_breaker_unit()
     test_stalled_session_leaves_room_to_reconnect()
     test_timed_out_write_is_not_replayed()
-    proc = start_server(PORT, TOKEN)
+    telemetry_dir = tempfile.TemporaryDirectory()
+    db_file = Path(telemetry_dir.name) / "telemetry.db"
+    proc = start_server(PORT, TOKEN, {"BLUEOCEAN_TELEMETRY_DB": str(db_file)})
     try:
         test_round_trip(URL)
+        test_bridge_names_itself(db_file)
         test_tool_error_is_not_an_outage(URL)
         test_wrong_token(URL)
         test_retired_owner_never_publishes(URL)
         test_caller_deadline_retires_a_stalled_session(URL)
     finally:
         stop_server(proc)
+        telemetry_dir.cleanup()
     test_dead_server()
     test_restart_reconnects()
     test_concurrent_callers_share_a_reconnect()
