@@ -129,12 +129,16 @@ def test_fingerprint() -> None:
     assert caller_fingerprint({}, None, "127.0.0.1") == "addr:127.0.0.1"
     assert caller_fingerprint(None, None, None) == "unknown"
     assert caller_fingerprint({"authorization": "Bearer other"}, None, "127.0.0.1") != by_header
+    # The server has one shared token, so the token alone says nothing about
+    # who is calling: with auth on, two machines must still be told apart.
+    elsewhere = caller_fingerprint({"authorization": "Bearer t1-secret-value"}, None, "10.0.0.9")
+    assert elsewhere != by_header, "a shared token must not merge callers on different machines"
     print("  OK")
 
 
 # ------------------------------------------------------------ end to end ----
 
-def wait_for_server(proc: subprocess.Popen, timeout: float = 30.0) -> None:
+def wait_for_server(proc: subprocess.Popen, timeout: float = 30.0, url: str = URL) -> None:
     deadline = time.time() + timeout
     while time.time() < deadline:
         if proc.poll() is not None:
@@ -142,7 +146,7 @@ def wait_for_server(proc: subprocess.Popen, timeout: float = 30.0) -> None:
             raise RuntimeError(f"Server process exited early:\n{err}")
         try:
             urllib.request.urlopen(
-                urllib.request.Request(URL, headers={"Accept": "application/json, text/event-stream"}),
+                urllib.request.Request(url, headers={"Accept": "application/json, text/event-stream"}),
                 timeout=1,
             )
             return
@@ -248,6 +252,87 @@ def test_end_to_end() -> None:
     print("  OK")
 
 
+AUTH_PORT = 8791
+AUTH_URL = f"http://127.0.0.1:{AUTH_PORT}/mcp"
+TOKEN = "session-identity-token-7f3a9c2e51"
+
+
+def raw_call(url: str, headers: dict, client_info: dict | None) -> int:
+    """A bare 2026-07-28 tools/call, so the client info can be left out
+    entirely -- the SDK's Client always fills in a default name."""
+    meta = {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {},
+    }
+    if client_info:
+        meta["io.modelcontextprotocol/clientInfo"] = client_info
+    body = {
+        "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+        "params": {"name": "memory_list_projects", "arguments": {}, "_meta": meta},
+    }
+    req = urllib.request.Request(url, json.dumps(body).encode(), {
+        "content-type": "application/json",
+        "accept": "application/json, text/event-stream",
+        "mcp-protocol-version": "2026-07-28",
+        "mcp-method": "tools/call",
+        "mcp-name": "memory_list_projects",
+        **headers,
+    })
+    with urllib.request.urlopen(req, timeout=20) as resp:
+        resp.read()
+        return resp.status
+
+
+def test_authenticated_end_to_end() -> None:
+    print("== auth on: header and ?token= share a session, anonymous still records, token never stored ==")
+    with tempfile.TemporaryDirectory() as d:
+        db_file = Path(d) / "telemetry.db"
+        err_file = Path(d) / "stderr.log"
+        env = {**os.environ, "BLUEOCEAN_AUTH_TOKEN": TOKEN, "BLUEOCEAN_TELEMETRY_DB": str(db_file)}
+        with open(err_file, "w") as err:
+            proc = subprocess.Popen(
+                [BIN, "--transport", "streamable-http", "--host", "127.0.0.1", "--port", str(AUTH_PORT)],
+                env=env, stdout=subprocess.DEVNULL, stderr=err, text=True,
+            )
+            try:
+                wait_for_server(proc, url=AUTH_URL)
+                agent = {"name": "kiro-like", "version": "1"}
+                assert raw_call(AUTH_URL, {"authorization": f"Bearer {TOKEN}"}, agent) == 200
+                assert raw_call(f"{AUTH_URL}?token={TOKEN}", {}, agent) == 200
+                assert raw_call(AUTH_URL, {"authorization": f"Bearer {TOKEN}"}, None) == 200
+                deadline = time.time() + 10
+                rows: list = []
+                while time.time() < deadline and len(rows) < 3:
+                    try:
+                        with sqlite3.connect(db_file) as reader:
+                            rows = reader.execute(
+                                "SELECT agent_name, session_id, session_source FROM events ORDER BY id"
+                            ).fetchall()
+                    except sqlite3.OperationalError:
+                        rows = []
+                    time.sleep(0.3)
+                with sqlite3.connect(db_file) as reader:
+                    tables = [r[0] for r in reader.execute("SELECT name FROM sqlite_master WHERE type='table'")]
+                    stored = "\n".join(
+                        str(v) for t in tables for row in reader.execute(f"SELECT * FROM {t}") for v in row
+                    )
+            finally:
+                proc.terminate()
+                proc.wait(timeout=10)
+        stderr = err_file.read_text()
+
+    print("  rows:", rows)
+    assert len(rows) >= 3, rows
+    by_header, by_query, anonymous = rows[:3]
+    assert by_header[2] == by_query[2] == "derived", rows
+    assert by_header[1] == by_query[1], "the same caller by header and by ?token= must share a session"
+    assert anonymous[2] == "derived" and anonymous[1], f"a client with no info must still record: {anonymous}"
+    assert anonymous[1] != by_header[1], "an anonymous client is not the named agent's session"
+    assert TOKEN not in stored, "the bearer token reached the telemetry database"
+    assert TOKEN not in stderr, "the bearer token reached the server log"
+    print("  OK")
+
+
 def test_stdio_end_to_end() -> None:
     print("== real stdio server: calls land on the per-process id ==")
     from mcp import ClientSession, StdioServerParameters
@@ -283,5 +368,6 @@ if __name__ == "__main__":
     test_concurrent_calls()
     test_fingerprint()
     test_end_to_end()
+    test_authenticated_end_to_end()
     test_stdio_end_to_end()
     print("\nSESSION IDENTITY TEST PASSED")

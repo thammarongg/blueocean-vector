@@ -50,7 +50,7 @@ BlueOcean Vector is a small, boring fix: one shared memory store, one URL, and a
 
 There's already a well-populated field of "memory for AI agents" projects. Worth being upfront about where this one actually sits, instead of pretending the space is empty.
 
-Checked against each project's own repository on 2026-11-13; the sources and confidence for every cell are in [docs/market-research-2026-11.md](docs/market-research-2026-11.md). This field moves fast, so treat the table as dated.
+Checked against each project's own repository on 2026-11-13; the sources and confidence for each row are in [docs/market-research-2026-11.md](docs/market-research-2026-11.md) (items 2, 3, 6 and 7). This field moves fast, so treat the table as dated.
 
 | Project | How an agent talks to it | Who decides what's remembered | Retrieval |
 |---|---|---|---|
@@ -67,7 +67,7 @@ The agents' own built-in memories ([Claude Code auto memory](https://code.claude
 
 Two honest takeaways:
 
-- **The "shared memory for every coding agent" niche is crowded, and BlueOcean is the smallest entrant in it.** claude-mem and mem0 both reach the same clients through hooks, and Memorix now runs as a shared HTTP server too. What is still different here: it is fully local and free with no account or API key (mem0's plugins need a platform key); it is MIT-licensed; the default embedding model is genuinely multilingual (Thai+English tested) with no extra setup; and it is built to run as one shared, persistent server across tools *and* machines — bearer-token auth, optional TLS, a documented path to ECS, Kubernetes-ready health probes, and real fixes for the concurrency problems a *shared* server actually hits. Where it is behind: every larger project above fuses keyword and semantic search, and this one is still dense-only.
+- **The "shared memory for every coding agent" niche is crowded, and BlueOcean is the smallest entrant in it.** claude-mem and mem0 both reach the same clients through hooks, and Memorix now runs as a shared HTTP server too. What is still different here: it is fully local and free with no account or API key (mem0's plugins need a platform key); it is MIT-licensed; the default embedding model is genuinely multilingual (Thai+English tested) with no extra setup; and it is built to run as one shared, persistent server across tools *and* machines — bearer-token auth, optional TLS, a documented path to ECS, Kubernetes-ready health probes, and real fixes for the concurrency problems a *shared* server actually hits. Where it is behind: claude-mem, mem0, Graphiti and Memorix all combine keyword and semantic search, and this one is still dense-only.
 - **No automatic extraction or consolidation** — unlike mem0, Graphiti, Letta, cognee, or LangMem, nothing here reads your conversation and decides what's worth remembering. That's a deliberate simplicity trade-off, not a missing feature: an agent has to explicitly call `memory_store`. The one automatic write is the [Hermes provider](#hermes-automatic-recall)'s Turn Trace, a mechanical record of a local session's turn rather than a judgment about what matters, and it is kept out of every search that doesn't ask for it. If you want a system that reasons about what to keep on your behalf, one of the projects above will do that better than this will.
 
 ### Memory shouldn't try to hold a million lines
@@ -360,8 +360,8 @@ every input and dumping every column to prove they are absent.
 Each call also gets a session id, and `session_source` says where it came
 from. A handshake-era client echoes `mcp-session-id` (`header`). A 2026-07-28
 client sends no session at all, so the server derives one from the agent's
-name and version, the caller (a hash of its bearer token, or its address) and
-the project, and starts a new one after `BLUEOCEAN_SESSION_IDLE_SECONDS` of
+name and version, the caller (its address, plus a hash of its bearer token
+when auth is on) and the project, and starts a new one after `BLUEOCEAN_SESSION_IDLE_SECONDS` of
 silence (`derived`). On stdio the process stands in (`process`). The limit of
 `derived`: two windows of the same agent on the same project, from the same
 caller, count as one session. The token hash is only held in memory to tell

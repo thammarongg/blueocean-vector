@@ -81,18 +81,21 @@ def caller_fingerprint(
 
     A bearer token (the Authorization header, or the ``?token=`` query param
     that Kiro needs) is reduced to a short SHA-256 prefix; the same token by
-    either route gives the same fingerprint. With no token, the remote
-    address stands in.
+    either route gives the same fingerprint. The address is always part of
+    it: the server has one shared token, so with auth on the token alone is
+    the same for every caller and would merge two machines into one session.
+    A client whose address changes mid-session is split instead, which is
+    the cheap direction to be wrong (issue #6).
     """
     token = query_token
     auth = (headers or {}).get("authorization", "")
     if auth.lower().startswith("bearer "):
         token = auth[7:].strip() or token
+    addr = f"addr:{remote}" if remote else ""
     if token:
-        return "tok:" + hashlib.sha256(token.encode()).hexdigest()[:16]
-    if remote:
-        return f"addr:{remote}"
-    return "unknown"
+        digest = "tok:" + hashlib.sha256(token.encode()).hexdigest()[:16]
+        return f"{digest}@{addr}" if addr else digest
+    return addr or "unknown"
 
 
 _tracker: SessionTracker | None = None
