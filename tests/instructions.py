@@ -20,6 +20,8 @@ Run with:
     uv run python -m tests.instructions
 """
 
+import asyncio
+
 from blueocean_mcp.server import build_server
 
 
@@ -61,7 +63,30 @@ def main() -> None:
         )
     print("  no ending-conditioned summarise demand")
 
+    check_tool_descriptions()
+
     print("\nAll instruction checks passed.")
+
+
+def check_tool_descriptions() -> None:
+    """Under 2026-07-28 the instructions arrive only in server/discover, which
+    a client MAY skip (the SDK's own pinned-version mode does). Every client
+    calls tools/list, so the two triggers an agent can act on live in the
+    descriptions too."""
+    tools = {t.name: (t.description or "") for t in asyncio.run(build_server().list_tools())}
+    manifest = tools["memory_manifest"].lower()
+    assert "start of a session" in manifest, (
+        "memory_manifest's description must say to call it at the start of a session"
+    )
+    store = tools["memory_store"].lower()
+    assert "decided" in store and "right then" in store, (
+        "memory_store's description must carry the save-as-you-go trigger: "
+        "write right then, when something is decided"
+    )
+    assert "ending" not in store and "before ending" not in manifest, (
+        "issue #10: an ending is not a moment an agent can act on"
+    )
+    print("  tool descriptions carry the start-of-session and decision triggers")
 
 
 if __name__ == "__main__":
