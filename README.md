@@ -292,6 +292,7 @@ Everything lives in `.env` (copy `.env.example` to start). The defaults work for
 - `BLUEOCEAN_MAX_TOKENS` / `BLUEOCEAN_TOP_K` — the default search budget.
 - `BLUEOCEAN_AUTH_TOKEN` — unset by default (fine for `127.0.0.1`-only use). See [Security](#security) if you're exposing this beyond your own machine.
 - `BLUEOCEAN_TLS_CERTFILE` / `BLUEOCEAN_TLS_KEYFILE` — serve HTTPS with this certificate and key. Unset by default (plain HTTP). See [TLS](#tls).
+- `BLUEOCEAN_SESSION_IDLE_SECONDS` — how many seconds of silence end a telemetry session (default `1800`). See [Usage telemetry](#usage-telemetry).
 - `BLUEOCEAN_TRACE_KINDS` — record kinds kept out of every search that doesn't name them with `kind=` (default `hermes_turn`, comma-separated, empty disables). Traces are written mechanically every turn; without this they would crowd real entries out of other agents' search budget.
 
 Transport (`streamable-http` vs `stdio`) is a CLI flag, not an env var — it's a "how do I run this" choice made at startup, not a persistent setting.
@@ -355,6 +356,16 @@ cost. It is on by default and never leaves the machine.
 It never stores query text, memory content, summaries, entry metadata, or
 bearer tokens. A test asserts this by pushing unique sentinel strings through
 every input and dumping every column to prove they are absent.
+
+Each call also gets a session id, and `session_source` says where it came
+from. A handshake-era client echoes `mcp-session-id` (`header`). A 2026-07-28
+client sends no session at all, so the server derives one from the agent's
+name and version, the caller (a hash of its bearer token, or its address) and
+the project, and starts a new one after `BLUEOCEAN_SESSION_IDLE_SECONDS` of
+silence (`derived`). On stdio the process stands in (`process`). The limit of
+`derived`: two windows of the same agent on the same project, from the same
+caller, count as one session. The token hash is only held in memory to tell
+callers apart; it is never written to the database.
 
 Turn it off with `BLUEOCEAN_TELEMETRY=0`, in which case no database file is
 opened and the HTTP endpoints answer 503.
@@ -504,7 +515,7 @@ sudo chown -R 10001:10001 data && docker compose restart blueocean-mcp
 ## A few gotchas worth knowing before you touch this
 
 - **`qdrant-client` is pinned to the Qdrant server's exact version** (see the image tag in `docker-compose.yml`). Qdrant versions its client and server in lockstep, and the API has changed between releases — `.search()` was removed in favor of `.query_points()` in 1.19. If you bump the server image, bump `qdrant-client` to match and re-run the test suite; don't jump several versions on real data without a snapshot first.
-- **`mcp` is pinned `>=2.0.0,<3.0.0`**, tighter than most dependencies here. Its API (`mcp.server.mcpserver.MCPServer` and friends) has changed shape significantly between releases, and a loose constraint risks a Docker build silently resolving something incompatible — Docker builds don't use `uv.lock`.
+- **`mcp` is pinned `>=2.3.0,<3.0.0`**, tighter than most dependencies here. Its API (`mcp.server.mcpserver.MCPServer` and friends) has changed shape significantly between releases, and a loose constraint risks a Docker build silently resolving something incompatible — Docker builds don't use `uv.lock` (which is how the live container ended up on 2.3.0 while the lock still said 2.0.0).
 - **Embedding provider and model are a matched pair.** Switch either one and old vectors become unsearchable garbage against new ones. Pin the model in `.env` rather than trusting a library default that might change out from under you.
 - **Project vocabulary lives in [`CONTEXT.md`](CONTEXT.md), and one term is a live trap.** "Summary" covers two things that do not substitute for one another: a *Session Summary* is written by an agent and carries what was decided and why, while a *Session Trace* is composed by the server and records only what a session touched. Only the first exists today (`memory_summarize_session`); the second is a decided design, not shipped. Read the glossary before naming anything new in this codebase.
 
