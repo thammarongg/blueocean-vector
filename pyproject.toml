@@ -23,7 +23,7 @@ dependencies = [
     # -- has changed significantly between releases; a loose constraint here
     # risks `pip install .` in Docker silently resolving an incompatible
     # version, since Docker builds don't use uv.lock).
-    "mcp>=2.0.0,<3.0.0",
+    "mcp>=2.3.0,<3.0.0",
     "qdrant-client>=1.19.0,<1.20",
     "fastembed>=0.3.0",
 ]
