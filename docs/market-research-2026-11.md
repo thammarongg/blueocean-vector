@@ -92,10 +92,15 @@ Confidence: High, read straight from `gh api repos/<owner>/<repo>`. Stars are an
 
 **Inference:** the README row for mem0 ("SDK / hosted API") understates mem0's position today. mem0 now ships hook-based coding-agent plugins for many of the same clients BlueOcean targets, though they are tied to its hosted platform.
 
-### README claims this research did not check
+### 7. Rows checked for the README refresh (same day)
 
-- The `threadctx-mcp` row in the README table was not in scope and is unverified.
-- The Zep/Graphiti and Letta rows were checked only for repo stats, not for retrieval behaviour.
+These rows were not part of items 1-6 and were checked afterwards, from each project's own README (via `gh api repos/<owner>/<repo>/readme`), before the README table was rewritten.
+
+| Project | Finding | Confidence |
+|---|---|---|
+| [threadctx-dev/threadctx-mcp](https://github.com/threadctx-dev/threadctx-mcp) (1 star, last push 2026-07-29) | "Shared memory MCP server for AI coding agents (Claude Code, Cursor). Free & local by default." Local matching "is keyword-based"; "Cloud (paid Team tier+): memory shared across everyone on the repo, with real semantic search". It has a "Passive capture — turn git history into memory" section (`threadctx capture` reads commits since the last run). | High |
+| [getzep/graphiti](https://github.com/getzep/graphiti) | "Hybrid Retrieval: Combines semantic embeddings, keyword (BM25), and graph traversal". The repo ships an `mcp_server/` directory. | High |
+| [letta-ai/letta](https://github.com/letta-ai/letta) | "The current source code lives in [`letta-ai/letta-code`](https://github.com/letta-ai/letta-code), which includes the agent harness, interactive terminal UI, App Server, channels, and the runtime". The `archive` branch holds "the retired Letta V1 API server". Letta's current retrieval behaviour was not checked, which is why the README no longer lists it as a row. | High (relocation); not checked (retrieval) |
 
 ## Local evidence (this repo, 2026-11-13)
 
@@ -208,6 +213,9 @@ The repo has 0 stars against a field of 1k to 117k. The deciding factor is distr
 - Memorix architecture: https://github.com/AVIDS2/memorix/blob/main/docs/ARCHITECTURE.md
 - Memorix Docker: https://github.com/AVIDS2/memorix/blob/main/docs/DOCKER.md
 - claude-mem README: https://github.com/thedotmack/claude-mem/blob/main/README.md
+- threadctx-mcp README: https://github.com/threadctx-dev/threadctx-mcp
+- Graphiti README: https://github.com/getzep/graphiti/blob/main/README.md
+- Letta README and its current source: https://github.com/letta-ai/letta, https://github.com/letta-ai/letta-code
 - GitHub repos (stats via `gh api repos/...`): https://github.com/thedotmack/claude-mem, https://github.com/mem0ai/mem0, https://github.com/AVIDS2/memorix, https://github.com/basicmachines-co/basic-memory, https://github.com/getzep/graphiti, https://github.com/letta-ai/letta, https://github.com/thammarongg/blueocean-vector
 - Claude Code memory docs: https://code.claude.com/docs/en/memory
 - Codex memories (redirect target of developers.openai.com/codex/memories): https://learn.chatgpt.com/docs/customization/memories?surface=app
