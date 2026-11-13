@@ -50,18 +50,24 @@ BlueOcean Vector is a small, boring fix: one shared memory store, one URL, and a
 
 There's already a well-populated field of "memory for AI agents" projects. Worth being upfront about where this one actually sits, instead of pretending the space is empty.
 
-| Project | How an agent talks to it | Who decides what's remembered | Semantic vector search |
+Checked against each project's own repository on 2026-11-13; the sources and confidence for every cell are in [docs/market-research-2026-11.md](docs/market-research-2026-11.md). This field moves fast, so treat the table as dated.
+
+| Project | How an agent talks to it | Who decides what's remembered | Retrieval |
 |---|---|---|---|
-| [mem0](https://github.com/mem0ai/mem0) | SDK / hosted API | Automatic — an LLM extracts facts on ingest | Yes, wrapped behind the extraction layer |
-| [Zep / Graphiti](https://github.com/getzep/graphiti) | SDK, or an official MCP server | Automatic — entities/relationships extracted into a knowledge graph | Secondary to graph traversal |
-| [Letta](https://github.com/letta-ai/letta) (formerly MemGPT) | Full stateful-agent platform, server + SDK | Semi-automatic — the agent's own LLM pages memory in/out | Yes, for archival memory |
-| [Memorix](https://github.com/AVIDS2/memorix) | MCP-native, no server to run | Explicit — the calling agent writes | **Fallback only** (~1.8s), keyword search is primary |
-| threadctx-mcp | MCP-native | Explicit + optional passive git capture | **Paid cloud tier** — local mode is keyword-only |
-| **BlueOcean Vector** | MCP-native, one shared server | Explicit — the calling agent writes (optional automatic recall through the [Hermes provider](#hermes-automatic-recall)) | **Primary and always-on** |
+| [claude-mem](https://github.com/thedotmack/claude-mem) | Plugin with hooks for Claude Code, Codex, Gemini, Hermes, Copilot, OpenCode and others; MCP search tools | Automatic — hooks hand tool activity to a local LLM "observer" that writes observations (explicit saves also possible) | Hybrid: SQLite FTS5 keyword + Chroma vectors |
+| [mem0](https://github.com/mem0ai/mem0) | SDK / hosted API, plus hook plugins for Claude Code, Codex, Cursor, Hermes, OpenCode (needs a Mem0 Platform key) | Automatic — an LLM extracts facts on ingest | Fused: semantic + BM25 keyword + entity matching |
+| [Zep / Graphiti](https://github.com/getzep/graphiti) | SDK, or its own MCP server | Automatic — entities/relationships extracted into a knowledge graph | Hybrid: semantic + BM25 keyword + graph traversal |
+| [Memorix](https://github.com/AVIDS2/memorix) | MCP over stdio by default, or one shared HTTP server (Docker, bearer token); integrations for ~20 clients | Explicit writes, plus hook capture (on by default for Claude Code), git-commit ingestion and optional LLM extraction; hook captures stay pending until qualified | Keyword-first (BM25 / FTS5); hybrid semantic when an embedding provider is configured |
+| [threadctx-mcp](https://github.com/threadctx-dev/threadctx-mcp) | MCP-native | Explicit + optional passive git-commit capture | Keyword locally; semantic search is the **paid cloud tier** |
+| **BlueOcean Vector** | MCP-native, one shared server (bearer token, optional TLS) | Explicit — the calling agent writes (optional automatic recall through the [Hermes provider](#hermes-automatic-recall)) | Dense vectors only, always on, multilingual by default; **no keyword path yet**, so exact identifiers (a commit SHA, an issue number) can miss |
+
+[Letta](https://github.com/letta-ai/letta) (formerly MemGPT) used to sit in this table as a memory server; its current source is [letta-code](https://github.com/letta-ai/letta-code), a coding-agent harness with its own memory, so it is a different kind of thing now.
+
+The agents' own built-in memories ([Claude Code auto memory](https://code.claude.com/docs/en/memory), [Codex memories](https://learn.chatgpt.com/docs/customization/memories?surface=app)) are documented as machine-local, and neither describes sharing with another tool.
 
 Two honest takeaways:
 
-- **The "MCP-native, works with any client" niche isn't empty** — Memorix already lives there, with more built-in tools. What's different here is that vector search is the primary retrieval path rather than a fallback or something gated behind a paid tier, the default embedding model is genuinely multilingual (Thai+English tested), and it's built to run as one shared, persistent server rather than a zero-install per-agent tool — bearer-token auth, a documented path to ECS, Kubernetes-ready health probes, and real fixes for the concurrency problems a *shared* server actually hits.
+- **The "shared memory for every coding agent" niche is crowded, and BlueOcean is the smallest entrant in it.** claude-mem and mem0 both reach the same clients through hooks, and Memorix now runs as a shared HTTP server too. What is still different here: it is fully local and free with no account or API key (mem0's plugins need a platform key); it is MIT-licensed; the default embedding model is genuinely multilingual (Thai+English tested) with no extra setup; and it is built to run as one shared, persistent server across tools *and* machines — bearer-token auth, optional TLS, a documented path to ECS, Kubernetes-ready health probes, and real fixes for the concurrency problems a *shared* server actually hits. Where it is behind: every larger project above fuses keyword and semantic search, and this one is still dense-only.
 - **No automatic extraction or consolidation** — unlike mem0, Graphiti, Letta, cognee, or LangMem, nothing here reads your conversation and decides what's worth remembering. That's a deliberate simplicity trade-off, not a missing feature: an agent has to explicitly call `memory_store`. The one automatic write is the [Hermes provider](#hermes-automatic-recall)'s Turn Trace, a mechanical record of a local session's turn rather than a judgment about what matters, and it is kept out of every search that doesn't ask for it. If you want a system that reasons about what to keep on your behalf, one of the projects above will do that better than this will.
 
 ### Memory shouldn't try to hold a million lines
