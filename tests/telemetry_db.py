@@ -78,6 +78,8 @@ def test_migration_is_additive() -> None:
         row = conn.execute("SELECT tool, origin FROM events").fetchone()
         assert row[0] == "old", row
         assert row[1] is None, "pre-existing rows keep NULL for new columns"
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(events)")}
+        assert "session_source" in cols, "an older database must gain session_source"
         assert conn.execute("PRAGMA user_version").fetchone()[0] == db.SCHEMA_VERSION
         conn.close()
     print("  OK")

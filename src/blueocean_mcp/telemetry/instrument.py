@@ -25,7 +25,7 @@ from mcp.server.mcpserver import Context
 
 from ..config import DEFAULT_EMBEDDING_PROVIDER, TRACE_KINDS
 from ..health import resolve_embedding_model
-from . import pricing, usage
+from . import pricing, sessions, usage
 from .writer import get_writer
 
 logger = logging.getLogger(__name__)
@@ -102,9 +102,19 @@ def _safe_error_message(exc: Exception, kwargs: dict) -> str | None:
     return message[:_ERROR_MSG_MAX]
 
 
-def _agent_identity(ctx: Any) -> dict:
-    """Best-effort identity from the MCP handshake. Every field is
-    client-supplied: fine as a grouping key, never an identity assertion."""
+def _agent_identity(ctx: Any, project: str | None = None) -> dict:
+    """Best-effort identity from the request. Every field is client-supplied:
+    fine as a grouping key, never an identity assertion.
+
+    The session id comes from the first of these that applies, and
+    ``session_source`` says which:
+
+    - ``header``: a handshake-era client echoes ``mcp-session-id``.
+    - ``derived``: any other HTTP request. 2026-07-28 removed the header, so
+      the server derives a session from (agent, caller, project) and renews
+      it after an idle gap (telemetry/sessions.py).
+    - ``process``: no HTTP request at all (stdio), so the per-process id.
+    """
     out: dict = {}
     if ctx is None:
         return out
@@ -117,15 +127,42 @@ def _agent_identity(ctx: Any) -> dict:
     except Exception:
         logger.debug("agent client identity unavailable", exc_info=True)
     try:
-        headers = ctx.headers or {}
-        # streamable-http issues an mcp-session-id and the client echoes it
-        # back. stdio has no headers at all, so without the fallback every
-        # stdio call in every process recorded NULL and was indistinguishable
-        # from every other. The process id at least groups one run together.
-        out["session_id"] = headers.get("mcp-session-id") or _PROCESS_SESSION_ID
+        out.update(_session_identity(ctx, out, project))
     except Exception:
         logger.debug("agent session identity unavailable", exc_info=True)
     return out
+
+
+def _session_identity(ctx: Any, agent: dict, project: str | None) -> dict:
+    headers = ctx.headers or {}
+    header_id = headers.get("mcp-session-id")
+    if header_id:
+        return {"session_id": header_id, "session_source": "header"}
+    # Tolerant on purpose: a context without a request (stdio, or one built
+    # outside a live call) must still land on the process id below, not lose
+    # its session to an AttributeError swallowed by the caller.
+    request = getattr(getattr(ctx, "request_context", None), "request", None)
+    if request is not None and hasattr(request, "client"):
+        client = getattr(request, "client", None)
+        caller = sessions.caller_fingerprint(
+            headers,
+            request.query_params.get("token"),
+            getattr(client, "host", None),
+        )
+        key = (
+            agent.get("agent_name") or "",
+            agent.get("agent_version") or "",
+            caller,
+            project or "",
+        )
+        return {
+            "session_id": sessions.get_tracker().session_for(key),
+            "session_source": "derived",
+        }
+    # stdio has no headers at all, so without this every stdio call in every
+    # process recorded NULL and was indistinguishable from every other. The
+    # process id at least groups one run together.
+    return {"session_id": _PROCESS_SESSION_ID, "session_source": "process"}
 
 
 def _extract_search(kwargs: dict, result: Any) -> tuple[dict, tuple | None]:
@@ -228,7 +265,7 @@ def instrument(
         for field in ("project", "area", "module"):
             if field in kwargs:
                 row[field] = kwargs[field]
-        row.update(_agent_identity(ctx))
+        row.update(_agent_identity(ctx, kwargs.get("project")))
 
         try:
             result = fn(*args, **kwargs)
