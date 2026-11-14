@@ -50,6 +50,9 @@ _EVENT_COLUMNS: list[tuple[str, str]] = [
     ("agent_name", "TEXT"),
     ("agent_version", "TEXT"),
     ("session_id", "TEXT"),
+    # How session_id was obtained: header (handshake-era mcp-session-id),
+    # derived (telemetry/sessions.py), or process (stdio's per-process id).
+    ("session_source", "TEXT"),
     ("agent_session_label", "TEXT"),
     ("ok", "INTEGER"),
     ("error_class", "TEXT"),

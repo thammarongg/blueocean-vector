@@ -52,6 +52,11 @@ DEFAULT_PRICING_FILE = os.getenv(
 TELEMETRY_RETENTION_DAYS = int(os.getenv("BLUEOCEAN_TELEMETRY_RETENTION_DAYS", "90"))
 TELEMETRY_QUEUE_SIZE = int(os.getenv("BLUEOCEAN_TELEMETRY_QUEUE", "10000"))
 
+# A server-derived Session (telemetry/sessions.py) ends after this much
+# silence from its key. 30 minutes matches the mcp SDK's own idle expiry for
+# handshake-era sessions, so both kinds of client end on the same clock.
+SESSION_IDLE_SECONDS = float(os.getenv("BLUEOCEAN_SESSION_IDLE_SECONDS", "1800"))
+
 # Where blueocean-admin looks for the server when it needs telemetry it is
 # not allowed to read off disk (see the spec's single-writer rule).
 DEFAULT_SERVER_URL = os.getenv("BLUEOCEAN_SERVER_URL", "http://localhost:8765")

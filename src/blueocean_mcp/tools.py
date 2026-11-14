@@ -180,7 +180,10 @@ def register_tools(mcp: MCPServer, store: VectorStore) -> None:
 
     registrations = [
         (memory_store, "memory_store",
-         "Persist a memory entry for a project (content + condensed summary + importance + area/module)."),
+         ("Persist a memory entry for a project (content + condensed summary + importance + area/module). "
+         "Call it right then, whenever something is decided that a future session would otherwise "
+         "have to work out again: why an approach was chosen, what an investigation concluded, what "
+         "turned out not to work. A session that decided nothing writes nothing.")),
         (memory_search, "memory_search",
          "Semantic search a project's memory with token-budgeted return (summary + full layers)."),
         (memory_get, "memory_get",
@@ -190,7 +193,8 @@ def register_tools(mcp: MCPServer, store: VectorStore) -> None:
         (memory_list_projects, "memory_list_projects",
          "List all projects that have a memory collection."),
         (memory_manifest, "memory_manifest",
-         "Show the areas/modules present in a project's memory."),
+         ("Show the areas/modules present in a project's memory. Call it at the start of a session "
+         "in a project, before searching, to see what is already known.")),
         (memory_summarize_session, "memory_summarize_session",
          "Store a condensed summary of a work session for later retrieval."),
         (memory_stats, "memory_stats",

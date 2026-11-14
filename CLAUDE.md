@@ -1,3 +1,5 @@
+@AGENTS.md
+
 # AWS Guidance
 
 - Prefer the AWS MCP Server for AWS interactions — it provides sandboxed

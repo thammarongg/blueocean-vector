@@ -50,18 +50,24 @@ BlueOcean Vector is a small, boring fix: one shared memory store, one URL, and a
 
 There's already a well-populated field of "memory for AI agents" projects. Worth being upfront about where this one actually sits, instead of pretending the space is empty.
 
-| Project | How an agent talks to it | Who decides what's remembered | Semantic vector search |
+Checked against each project's own repository on 2026-11-13; the sources and confidence for each row are in [docs/market-research-2026-11.md](docs/market-research-2026-11.md) (items 2, 3, 6 and 7). This field moves fast, so treat the table as dated.
+
+| Project | How an agent talks to it | Who decides what's remembered | Retrieval |
 |---|---|---|---|
-| [mem0](https://github.com/mem0ai/mem0) | SDK / hosted API | Automatic — an LLM extracts facts on ingest | Yes, wrapped behind the extraction layer |
-| [Zep / Graphiti](https://github.com/getzep/graphiti) | SDK, or an official MCP server | Automatic — entities/relationships extracted into a knowledge graph | Secondary to graph traversal |
-| [Letta](https://github.com/letta-ai/letta) (formerly MemGPT) | Full stateful-agent platform, server + SDK | Semi-automatic — the agent's own LLM pages memory in/out | Yes, for archival memory |
-| [Memorix](https://github.com/AVIDS2/memorix) | MCP-native, no server to run | Explicit — the calling agent writes | **Fallback only** (~1.8s), keyword search is primary |
-| threadctx-mcp | MCP-native | Explicit + optional passive git capture | **Paid cloud tier** — local mode is keyword-only |
-| **BlueOcean Vector** | MCP-native, one shared server | Explicit — the calling agent writes (optional automatic recall through the [Hermes provider](#hermes-automatic-recall)) | **Primary and always-on** |
+| [claude-mem](https://github.com/thedotmack/claude-mem) | Plugin with hooks for Claude Code, Codex, Gemini, Hermes, Copilot, OpenCode and others; MCP search tools | Automatic — hooks hand tool activity to a local LLM "observer" that writes observations (explicit saves also possible) | Hybrid: SQLite FTS5 keyword + Chroma vectors |
+| [mem0](https://github.com/mem0ai/mem0) | SDK / hosted API, plus hook plugins for Claude Code, Codex, Cursor, Hermes, OpenCode (needs a Mem0 Platform key) | Automatic — an LLM extracts facts on ingest | Fused: semantic + BM25 keyword + entity matching |
+| [Zep / Graphiti](https://github.com/getzep/graphiti) | SDK, or its own MCP server | Automatic — entities/relationships extracted into a knowledge graph | Hybrid: semantic + BM25 keyword + graph traversal |
+| [Memorix](https://github.com/AVIDS2/memorix) | MCP over stdio by default, or one shared HTTP server (Docker, bearer token); integrations for ~20 clients | Explicit writes, plus hook capture (on by default for Claude Code), git-commit ingestion and optional LLM extraction; hook captures stay pending until qualified | Keyword-first (BM25 / FTS5); hybrid semantic when an embedding provider is configured |
+| [threadctx-mcp](https://github.com/threadctx-dev/threadctx-mcp) | MCP-native | Explicit + optional passive git-commit capture | Keyword locally; semantic search is the **paid cloud tier** |
+| **BlueOcean Vector** | MCP-native, one shared server (bearer token, optional TLS) | Explicit — the calling agent writes (optional automatic recall through the [Hermes provider](#hermes-automatic-recall)) | Dense vectors only, always on, multilingual by default; **no keyword path yet**, so exact identifiers (a commit SHA, an issue number) can miss |
+
+[Letta](https://github.com/letta-ai/letta) (formerly MemGPT) used to sit in this table as a memory server; its current source is [letta-code](https://github.com/letta-ai/letta-code), a coding-agent harness with its own memory, so it is a different kind of thing now.
+
+The agents' own built-in memories ([Claude Code auto memory](https://code.claude.com/docs/en/memory), [Codex memories](https://learn.chatgpt.com/docs/customization/memories?surface=app)) are documented as machine-local, and neither describes sharing with another tool.
 
 Two honest takeaways:
 
-- **The "MCP-native, works with any client" niche isn't empty** — Memorix already lives there, with more built-in tools. What's different here is that vector search is the primary retrieval path rather than a fallback or something gated behind a paid tier, the default embedding model is genuinely multilingual (Thai+English tested), and it's built to run as one shared, persistent server rather than a zero-install per-agent tool — bearer-token auth, a documented path to ECS, Kubernetes-ready health probes, and real fixes for the concurrency problems a *shared* server actually hits.
+- **The "shared memory for every coding agent" niche is crowded, and BlueOcean is the smallest entrant in it.** claude-mem and mem0 both reach the same clients through hooks, and Memorix now runs as a shared HTTP server too. What is still different here: it is fully local and free with no account or API key (mem0's plugins need a platform key); it is MIT-licensed; the default embedding model is genuinely multilingual (Thai+English tested) with no extra setup; and it is built to run as one shared, persistent server across tools *and* machines — bearer-token auth, optional TLS, a documented path to ECS, Kubernetes-ready health probes, and real fixes for the concurrency problems a *shared* server actually hits. Where it is behind: claude-mem, mem0, Graphiti and Memorix all combine keyword and semantic search, and this one is still dense-only.
 - **No automatic extraction or consolidation** — unlike mem0, Graphiti, Letta, cognee, or LangMem, nothing here reads your conversation and decides what's worth remembering. That's a deliberate simplicity trade-off, not a missing feature: an agent has to explicitly call `memory_store`. The one automatic write is the [Hermes provider](#hermes-automatic-recall)'s Turn Trace, a mechanical record of a local session's turn rather than a judgment about what matters, and it is kept out of every search that doesn't ask for it. If you want a system that reasons about what to keep on your behalf, one of the projects above will do that better than this will.
 
 ### Memory shouldn't try to hold a million lines
@@ -286,6 +292,7 @@ Everything lives in `.env` (copy `.env.example` to start). The defaults work for
 - `BLUEOCEAN_MAX_TOKENS` / `BLUEOCEAN_TOP_K` — the default search budget.
 - `BLUEOCEAN_AUTH_TOKEN` — unset by default (fine for `127.0.0.1`-only use). See [Security](#security) if you're exposing this beyond your own machine.
 - `BLUEOCEAN_TLS_CERTFILE` / `BLUEOCEAN_TLS_KEYFILE` — serve HTTPS with this certificate and key. Unset by default (plain HTTP). See [TLS](#tls).
+- `BLUEOCEAN_SESSION_IDLE_SECONDS` — how many seconds of silence end a telemetry session (default `1800`). See [Usage telemetry](#usage-telemetry).
 - `BLUEOCEAN_TRACE_KINDS` — record kinds kept out of every search that doesn't name them with `kind=` (default `hermes_turn`, comma-separated, empty disables). Traces are written mechanically every turn; without this they would crowd real entries out of other agents' search budget.
 
 Transport (`streamable-http` vs `stdio`) is a CLI flag, not an env var — it's a "how do I run this" choice made at startup, not a persistent setting.
@@ -349,6 +356,16 @@ cost. It is on by default and never leaves the machine.
 It never stores query text, memory content, summaries, entry metadata, or
 bearer tokens. A test asserts this by pushing unique sentinel strings through
 every input and dumping every column to prove they are absent.
+
+Each call also gets a session id, and `session_source` says where it came
+from. A handshake-era client echoes `mcp-session-id` (`header`). A 2026-07-28
+client sends no session at all, so the server derives one from the agent's
+name and version, the caller (its address, plus a hash of its bearer token
+when auth is on) and the project, and starts a new one after `BLUEOCEAN_SESSION_IDLE_SECONDS` of
+silence (`derived`). On stdio the process stands in (`process`). The limit of
+`derived`: two windows of the same agent on the same project, from the same
+caller, count as one session. The token hash is only held in memory to tell
+callers apart; it is never written to the database.
 
 Turn it off with `BLUEOCEAN_TELEMETRY=0`, in which case no database file is
 opened and the HTTP endpoints answer 503.
@@ -498,7 +515,7 @@ sudo chown -R 10001:10001 data && docker compose restart blueocean-mcp
 ## A few gotchas worth knowing before you touch this
 
 - **`qdrant-client` is pinned to the Qdrant server's exact version** (see the image tag in `docker-compose.yml`). Qdrant versions its client and server in lockstep, and the API has changed between releases — `.search()` was removed in favor of `.query_points()` in 1.19. If you bump the server image, bump `qdrant-client` to match and re-run the test suite; don't jump several versions on real data without a snapshot first.
-- **`mcp` is pinned `>=2.0.0,<3.0.0`**, tighter than most dependencies here. Its API (`mcp.server.mcpserver.MCPServer` and friends) has changed shape significantly between releases, and a loose constraint risks a Docker build silently resolving something incompatible — Docker builds don't use `uv.lock`.
+- **`mcp` is pinned `>=2.3.0,<3.0.0`**, tighter than most dependencies here. Its API (`mcp.server.mcpserver.MCPServer` and friends) has changed shape significantly between releases, and a loose constraint risks a Docker build silently resolving something incompatible — Docker builds don't use `uv.lock` (which is how the live container ended up on 2.3.0 while the lock still said 2.0.0).
 - **Embedding provider and model are a matched pair.** Switch either one and old vectors become unsearchable garbage against new ones. Pin the model in `.env` rather than trusting a library default that might change out from under you.
 - **Project vocabulary lives in [`CONTEXT.md`](CONTEXT.md), and one term is a live trap.** "Summary" covers two things that do not substitute for one another: a *Session Summary* is written by an agent and carries what was decided and why, while a *Session Trace* is composed by the server and records only what a session touched. Only the first exists today (`memory_summarize_session`); the second is a decided design, not shipped. Read the glossary before naming anything new in this codebase.
 

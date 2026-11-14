@@ -28,7 +28,7 @@ from collections.abc import Callable, Iterator
 from contextlib import AsyncExitStack
 from typing import Any
 
-from mcp import ClientSession
+from mcp import ClientSession, Implementation
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._httpx_utils import create_mcp_http_client
 
@@ -37,6 +37,10 @@ logger = logging.getLogger(__name__)
 CALL_TIMEOUT_S = 5.0
 COOLDOWN_S = 30.0
 QUEUE_SIZE = 200
+# Sent as the MCP client name. Without it the SDK sends its default, "mcp",
+# and the server's telemetry cannot tell this bridge from any other client
+# built on the Python SDK.
+CLIENT_INFO = Implementation(name="blueocean-hermes-provider", version="0.1.0")
 
 SpawnFn = Callable[[Callable[[], None], str], threading.Thread]
 
@@ -277,7 +281,7 @@ class Bridge:
                     create_mcp_http_client(headers=self._headers))
                 streams = await stack.enter_async_context(
                     streamable_http_client(self._url, http_client=client))
-                mine = await stack.enter_async_context(ClientSession(streams[0], streams[1]))
+                mine = await stack.enter_async_context(ClientSession(streams[0], streams[1], client_info=CLIENT_INFO))
                 await mine.initialize()
                 if closing.is_set() or self._owner is not asyncio.current_task():
                     # Retired while connecting: its caller gave up, or a newer

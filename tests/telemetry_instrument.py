@@ -470,6 +470,7 @@ def test_stdio_falls_back_to_a_per_process_session_id() -> None:
     assert first == second, (
         f"two calls in one process must share a session id: {first!r} vs {second!r}"
     )
+    assert capture.rows[0]["session_source"] == "process", capture.rows[0]
     print("  OK")
 
 
@@ -505,9 +506,9 @@ def test_client_info_is_recorded() -> None:
             from blueocean_mcp.telemetry import db
             conn = db.connect(str(Path(d) / "t.db"))
             row = conn.execute(
-                "SELECT agent_name, agent_version, session_id FROM events"
+                "SELECT agent_name, agent_version, session_id, session_source FROM events"
             ).fetchone()
-            assert row == ("probe-agent", "9.9.9", "sess-123"), row
+            assert row == ("probe-agent", "9.9.9", "sess-123", "header"), row
             conn.close()
         finally:
             w.stop()
