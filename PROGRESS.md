@@ -9,6 +9,13 @@ of green.
 
 ## Current state
 
+- 2026-11-19: feat/compose-env-passthrough (from main 738a2c8). compose now
+  passes `BLUEOCEAN_TOP_K`, `BLUEOCEAN_HNSW_M`, `BLUEOCEAN_HNSW_EF_CONSTRUCT`,
+  `BLUEOCEAN_HEALTH_EMBED_TTL` and `BLUEOCEAN_SESSION_IDLE_SECONDS`, each as
+  `${VAR:-code default}`; `tests/compose_env.py` fails on any `.env.example`
+  name that is neither passed nor excluded. `bash scripts/check.sh` GREEN:
+  30 test scripts, 0 failed. The 8765 container is not recreated; this
+  machine's `.env` values equal the defaults, so recreating changes nothing.
 - 2026-11-19: main @ ee5b772, merging origin/main after PR #12
   (feat/search-budget-4000, merged on GitHub as ad04121) into the 13
   previously unpushed main commits. `bash scripts/check.sh` GREEN: 29 test
@@ -50,15 +57,6 @@ of green.
 
 ## Next
 
-- `.env.example` variables docker-compose never passes to blueocean-mcp:
-  `BLUEOCEAN_TOP_K`, `BLUEOCEAN_QDRANT_API_KEY`, `BLUEOCEAN_HNSW_M`,
-  `BLUEOCEAN_HNSW_EF_CONSTRUCT`, `BLUEOCEAN_HEALTH_EMBED_TTL`,
-  `BLUEOCEAN_SESSION_IDLE_SECONDS`, `BLUEOCEAN_EMBEDDING` (an
-  `--embedding` flag exists but compose doesn't pass it), and the provider
-  settings `OPENAI_API_KEY`, `OPENAI_BASE_URL`, `AWS_REGION`,
-  `BLUEOCEAN_BEDROCK_MODEL_ID`, so openai/bedrock can't work under compose.
-  `BLUEOCEAN_EMBED_MODEL`/`_EMBED_CACHE_DIR` are fixed at image build;
-  `BLUEOCEAN_QDRANT_URL` is covered by `--qdrant-url`.
 - The project-name rule can still yield invalid names (a leading `_`, more
   than 100 characters) and doesn't mention `_suggest_slug`'s empty-result
   fallback `project`. The memory_* tool descriptions, which 2026-07-28
@@ -70,13 +68,25 @@ of green.
   request_context fails at `ctx.headers` first, unreachable from a real call);
   any `mcp-session-id` header is trusted as `header` even on a 2026-07-28
   request; `BLUEOCEAN_SESSION_IDLE_SECONDS` is not validated (0/negative
-  makes every call a new session); docker-compose does not pass it into the
-  container; rejected calls with invalid project names still occupy tracker
+  makes every call a new session); rejected calls with invalid project names still occupy tracker
   slots (bounded); `check.sh` keeps the template's unused `BASE`/`touched`;
   R001's root-commit fallback range excludes the root commit.
 - Optional explicit session handle (SEP-2567 pattern), deferred in the spec.
 - Recommendations 2-7 in `docs/market-research-2026-11.md` (Session Trace,
   hybrid search, write hygiene, auto-capture decision, review UI, team mode).
+
+## Decisions
+
+- 2026-11-19: openai/bedrock run only outside docker compose. The image
+  installs neither SDK (`pip install .` without the extras), Bedrock would
+  also need AWS credentials, and passing `BLUEOCEAN_EMBEDDING` would let one
+  `.env` edit switch the live embedder under existing collections. So
+  `BLUEOCEAN_EMBEDDING`, `OPENAI_*`, `AWS_REGION`,
+  `BLUEOCEAN_BEDROCK_MODEL_ID`, `BLUEOCEAN_EMBED_MODEL`/`_CACHE_DIR` and
+  `BLUEOCEAN_QDRANT_URL`/`_API_KEY` stay excluded, with reasons, in
+  `tests/compose_env.py`. Revisit only if a container needs a cloud
+  embedder: that means installing the extras at build, passing
+  credentials, and a plan for vector compatibility.
 
 ## Blockers
 
