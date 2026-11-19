@@ -15,10 +15,13 @@ of green.
   scripts, 0 failed, R001 pass. PR #12: default search budget 2000 -> 4000
   and passed to the container by docker-compose; the skill and the server
   instructions now say how to turn a folder name into a valid project name.
-  Not live on this machine yet: the local `.env` still sets
-  `BLUEOCEAN_MAX_TOKENS=2000` (it now wins over the default), the 8765
-  container is not rebuilt, and `install_skill.sh` never overwrites
-  `~/.agents/skills/blueocean-memory/SKILL.md`.
+  Pushed: origin/main = main.
+- 2026-11-19: live on this machine. `scripts/update.sh` rebuilt the 8765
+  container from main @ f9cef1f (Qdrant untouched) and synced
+  `~/.agents/skills/blueocean-memory/SKILL.md` (old copy backed up beside
+  it). The local `.env` still said `BLUEOCEAN_MAX_TOKENS=2000`, which compose
+  now passes through, so it was set to 4000 and the container recreated. A
+  real `memory_search` without `max_tokens` returns `"budget": 4000`.
 - 2026-11-13: feat/mcp-2026-07-28 @ f02b9fd. `bash scripts/check.sh` GREEN:
   uv.lock in sync, ruff clean on the whole repo, Qdrant reachable, 28 test
   scripts, 0 failed. Harness gates proven by negative test: a planted lint
@@ -31,15 +34,16 @@ of green.
   load. If it recurs, raise `wait_for_server`'s timeout rather than skipping.
 - R001 scans commits and tracked changes, not untracked files: `git add` a
   new file before relying on it.
-- The live container (port 8765) has NOT been rebuilt with this branch. It
-  already runs mcp 2.3.0; derived sessions, `session_source`, the Hermes
-  client name and the new tool descriptions reach it only after merge and
-  `scripts/update.sh`.
+- The live container (port 8765) runs main @ f9cef1f since 2026-11-19, so
+  it includes feat/mcp-2026-07-28 (mcp 2.3.0, derived sessions,
+  `session_source`, the Hermes client name, the new tool descriptions).
 
 ## In progress
 
-- `.worktrees/mcp-2026-07-28` (branch feat/mcp-2026-07-28): done and
-  reviewed, waiting for the merge decision. Contains the harness onboarding,
+- `.worktrees/mcp-2026-07-28` (branch feat/mcp-2026-07-28): merged into
+  main (2df100a) and pushed 2026-11-19. The worktree still exists and is
+  locked by its owner (claude-code 5a1cb669); removing it is that owner's
+  call. Contains the harness onboarding,
   the 2026-11 market research, the README comparison refresh (#0) and
   MCP 2026-07-28 compatibility (#1). Design:
   `docs/superpowers/specs/2026-11-13-mcp-2026-07-28-compat-design.md`.
