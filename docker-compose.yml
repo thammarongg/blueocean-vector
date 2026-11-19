@@ -56,6 +56,8 @@ services:
       - BLUEOCEAN_PRICING_FILE=/data/pricing.json
       # Kinds hidden from searches that don't name them (comma-separated).
       - BLUEOCEAN_TRACE_KINDS=${BLUEOCEAN_TRACE_KINDS-hermes_turn}
+      # Default memory_search token budget; empty/unset = 4000.
+      - BLUEOCEAN_MAX_TOKENS=${BLUEOCEAN_MAX_TOKENS:-4000}
     ports:
       - "8765:8765"
     healthcheck:

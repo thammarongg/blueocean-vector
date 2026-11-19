@@ -14,7 +14,14 @@ in one tool.
 ## At the start of a session
 
 1. Determine `project` -- use the current working directory's folder name
-   unless the user says otherwise.
+   unless the user says otherwise. The server only accepts names matching
+   `^[a-z0-9][a-z0-9_-]{0,99}$`, so convert the folder name first:
+   - convert it to lowercase;
+   - replace each run of characters outside `a-z`, `0-9`, `_` and `-`
+     with a single `-`;
+   - collapse repeated `-` into one, and trim `-` from both ends.
+
+   For example, `Projects` -> `projects` and `My App` -> `my-app`.
 2. Call `memory_manifest(project)` to see what areas/modules already have
    recorded knowledge. If the project has no memory yet, skip to working
    normally.
@@ -79,5 +86,5 @@ Entries stored without a `kind` are never dropped by `exclude_kinds`.
 - If the `blueocean` MCP server isn't connected/reachable, just proceed
   normally -- don't block work on it.
 - Token budget is handled server-side (`memory_search` returns a
-  budgeted `summary` + `full` split, default ~2000 tokens); no need to
+  budgeted `summary` + `full` split, default ~4000 tokens); no need to
   manually trim what you read back.
