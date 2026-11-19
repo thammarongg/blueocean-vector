@@ -20,7 +20,10 @@ Run with:
     uv run python -m tests.instructions
 """
 
+import re
+
 from blueocean_mcp.server import build_server
+from blueocean_mcp.vector_store import _PROJECT_NAME_RE, _suggest_slug
 
 
 def main() -> None:
@@ -47,6 +50,28 @@ def main() -> None:
     assert "memory_manifest" in instructions
     assert "memory_search" in instructions
     print("  manifest + search still instructed at the start")
+
+    print("== the directory name is turned into a project name the server accepts ==")
+    # The server rejects names like `Projects`, so "use the directory's name"
+    # alone sends agents a name that fails on their first call.
+    start = instructions.index("AT THE START")
+    clause = instructions[start : instructions.index("\n\n", start)]
+    assert "directory's name" in clause, "the directory-name rule is gone"
+    for phrase in ("lowercase", "a-z", "0-9", "collapse", "trim"):
+        assert phrase in clause, (
+            f"the start-of-session clause does not state the project-name rule "
+            f"(missing {phrase!r})"
+        )
+    examples = re.findall(r"`([^`]+)` -> `([^`]+)`", clause)
+    assert ("Projects", "projects") in examples, f"missing `Projects` -> `projects`: {examples}"
+    assert ("My App", "my-app") in examples, f"missing `My App` -> `my-app`: {examples}"
+    for folder, project in examples:
+        assert _suggest_slug(folder) == project, (
+            f"instructions say {folder!r} -> {project!r}, "
+            f"_suggest_slug gives {_suggest_slug(folder)!r}"
+        )
+        assert _PROJECT_NAME_RE.match(project), f"{project!r} is not a valid project name"
+    print(f"  conversion rule stated; examples match _suggest_slug: {examples}")
 
     print("== storing as you go is still instructed ==")
     assert "memory_store" in instructions
