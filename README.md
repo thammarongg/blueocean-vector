@@ -295,6 +295,8 @@ Everything lives in `.env` (copy `.env.example` to start). The defaults work for
 - `BLUEOCEAN_SESSION_IDLE_SECONDS` — how many seconds of silence end a telemetry session (default `1800`). See [Usage telemetry](#usage-telemetry).
 - `BLUEOCEAN_TRACE_KINDS` — record kinds kept out of every search that doesn't name them with `kind=` (default `hermes_turn`, comma-separated, empty disables). Traces are written mechanically every turn; without this they would crowd real entries out of other agents' search budget.
 
+Under Docker Compose, `docker-compose.yml` passes each setting to the container by name, and `tests/compose_env.py` fails if `.env.example` gains one that is neither passed nor deliberately excluded. Excluded today: `BLUEOCEAN_QDRANT_URL` and `BLUEOCEAN_QDRANT_API_KEY` (compose points the server at its own keyless Qdrant), and the embedding settings. The image installs only `fastembed`, with its model downloaded at build time, so `BLUEOCEAN_EMBEDDING`, `BLUEOCEAN_EMBED_MODEL`, `BLUEOCEAN_EMBED_CACHE_DIR` and the OpenAI and Bedrock variables apply only when you run `blueocean-mcp` outside the container.
+
 Transport (`streamable-http` vs `stdio`) is a CLI flag, not an env var — it's a "how do I run this" choice made at startup, not a persistent setting.
 
 ---
