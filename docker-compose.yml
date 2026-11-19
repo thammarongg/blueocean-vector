@@ -58,6 +58,16 @@ services:
       - BLUEOCEAN_TRACE_KINDS=${BLUEOCEAN_TRACE_KINDS-hermes_turn}
       # Default memory_search token budget; empty/unset = 4000.
       - BLUEOCEAN_MAX_TOKENS=${BLUEOCEAN_MAX_TOKENS:-4000}
+      # The rest of .env.example's numeric settings. `:-` because each is
+      # parsed with int()/float() at startup: an empty value falls back to
+      # the code's default instead of stopping the server. Every .env.example
+      # name must be passed here or excluded in tests/compose_env.py.
+      - BLUEOCEAN_TOP_K=${BLUEOCEAN_TOP_K:-20}
+      # HNSW settings apply to collections created after a change.
+      - BLUEOCEAN_HNSW_M=${BLUEOCEAN_HNSW_M:-16}
+      - BLUEOCEAN_HNSW_EF_CONSTRUCT=${BLUEOCEAN_HNSW_EF_CONSTRUCT:-100}
+      - BLUEOCEAN_HEALTH_EMBED_TTL=${BLUEOCEAN_HEALTH_EMBED_TTL:-60}
+      - BLUEOCEAN_SESSION_IDLE_SECONDS=${BLUEOCEAN_SESSION_IDLE_SECONDS:-1800}
     ports:
       - "8765:8765"
     healthcheck:
