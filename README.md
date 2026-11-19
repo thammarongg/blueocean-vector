@@ -76,15 +76,15 @@ The result is that memory grows with *what's actually worth remembering*, not wi
 
 Reading memory back is where that distinction pays off. The cheapest alternative — a skill or plugin that dumps project notes into a `.remember` file an agent reads back — works great until the file outgrows the context window, then it silently stops being useful.
 
-BlueOcean caps every search at a token budget (default **2000 tokens**, configurable via `BLUEOCEAN_MAX_TOKENS`). Semantic search pulls only the relevant entries, then splits the budget: ~60% for condensed summaries, ~40% for the full content of the top hits. Entries beyond the budget are truncated, never dumped wholesale.
+BlueOcean caps every search at a token budget (default **4000 tokens**, configurable via `BLUEOCEAN_MAX_TOKENS`). Semantic search pulls only the relevant entries, then splits the budget: ~60% for condensed summaries, ~40% for the full content of the top hits. Entries beyond the budget are truncated, never dumped wholesale.
 
 | Approach | Cost per retrieval | Grows with memory size? |
 |---|---|---|
-| **BlueOcean Vector** (`memory_search`) | **capped** at the token budget (default 2000) | No — bounded, regardless of collection size |
+| **BlueOcean Vector** (`memory_search`) | **capped** at the token budget (default 4000) | No — bounded, regardless of collection size |
 | `.remember` file (read whole file) | equal to the whole file size | Yes — linear; eventually exceeds the context window |
 | `.remember` file (agent reads one section) | equal to that section | Partial — but the agent must guess which section without relevance ranking |
 
-A real search against a small demo project returned **121 tokens** for one summary + one full entry — a few percent of the 2000-token budget, and that budget never grows as the project accumulates memory. With a plain file, the same read costs the entire file every time, so a 5k-entry project (hundreds of thousands of tokens) is unreadable in one shot.
+A real search against a small demo project returned **121 tokens** for one summary + one full entry — a few percent of the 4000-token budget, and that budget never grows as the project accumulates memory. With a plain file, the same read costs the entire file every time, so a 5k-entry project (hundreds of thousands of tokens) is unreadable in one shot.
 
 ---
 

@@ -16,9 +16,12 @@ Run with:
     uv run python -m tests.install_skill
 """
 
+import re
 import subprocess
 import tempfile
 from pathlib import Path
+
+from blueocean_mcp.vector_store import _PROJECT_NAME_RE, _suggest_slug
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = REPO_ROOT / "scripts" / "install_skill.sh"
@@ -47,6 +50,25 @@ def main() -> None:
     assert repo_text.startswith("---"), "skill has no YAML frontmatter"
     assert "name: blueocean-memory" in repo_text
     print(f"  {REPO_SKILL.relative_to(REPO_ROOT)} ({len(repo_text)} chars)")
+
+    print("== the skill turns a folder name into a project name the server accepts ==")
+    # The server rejects names like `Projects`, so a skill that only says
+    # "use the folder name" gives agents a name that fails on the first call.
+    # The steps it gives must be the ones `_suggest_slug` follows.
+    start = repo_text.index("## At the start of a session")
+    step1 = repo_text[start : repo_text.index("\n2. ", start)]
+    assert "folder name" in step1, "step 1 lost the folder-name rule"
+    for phrase in ("lowercase", "a-z", "0-9", "collapse", "trim"):
+        assert phrase in step1, f"step 1 does not state the slug rule (missing {phrase!r})"
+    examples = re.findall(r"`([^`]+)` -> `([^`]+)`", step1)
+    assert ("Projects", "projects") in examples, f"missing `Projects` -> `projects`: {examples}"
+    assert ("My App", "my-app") in examples, f"missing `My App` -> `my-app`: {examples}"
+    for folder, project in examples:
+        assert _suggest_slug(folder) == project, (
+            f"skill says {folder!r} -> {project!r}, _suggest_slug gives {_suggest_slug(folder)!r}"
+        )
+        assert _PROJECT_NAME_RE.match(project), f"{project!r} is not a valid project name"
+        print(f"  {folder!r} -> {project!r} (matches _suggest_slug, valid name)")
 
     print("== a fresh machine gets the canonical file seeded from the repo ==")
     with tempfile.TemporaryDirectory() as tmp:
