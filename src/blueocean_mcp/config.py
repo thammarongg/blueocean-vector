@@ -5,7 +5,7 @@ DEFAULT_QDRANT_URL = os.getenv("BLUEOCEAN_QDRANT_URL", "http://localhost:6333")
 DEFAULT_EMBEDDING_PROVIDER = os.getenv("BLUEOCEAN_EMBEDDING", "fastembed")
 DEFAULT_EMBED_MODEL = os.getenv("BLUEOCEAN_EMBED_MODEL", "intfloat/multilingual-e5-large")
 DEFAULT_COLLECTION_PREFIX = os.getenv("BLUEOCEAN_COLLECTION_PREFIX", "blueocean")
-DEFAULT_MAX_TOKENS = int(os.getenv("BLUEOCEAN_MAX_TOKENS", "2000"))
+DEFAULT_MAX_TOKENS = int(os.getenv("BLUEOCEAN_MAX_TOKENS", "4000"))
 DEFAULT_TOP_K = int(os.getenv("BLUEOCEAN_TOP_K", "20"))
 
 # Kinds of record written mechanically, every turn or every session, rather

@@ -79,5 +79,5 @@ Entries stored without a `kind` are never dropped by `exclude_kinds`.
 - If the `blueocean` MCP server isn't connected/reachable, just proceed
   normally -- don't block work on it.
 - Token budget is handled server-side (`memory_search` returns a
-  budgeted `summary` + `full` split, default ~2000 tokens); no need to
+  budgeted `summary` + `full` split, default ~4000 tokens); no need to
   manually trim what you read back.
